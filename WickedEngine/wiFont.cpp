@@ -43,7 +43,7 @@ namespace wiFont_Internal
 	Shader				pixelShader;
 	PipelineState		PSO;
 
-	atomic_bool initialized { false };
+	atomic_bool initialized{ false };
 
 	Texture texture;
 
@@ -133,8 +133,9 @@ namespace wiFont_Internal
 
 		int code_prev = 0;
 		size_t i = 0;
-		while(text[i] != 0)
+		while (text[i] != 0)
 		{
+			int code = (int)text[i++];
 			T character = text[i++];
 			int code = (int)character;
 			const int32_t hash = glyphhash(code, params.style, params.size);
@@ -235,463 +236,503 @@ namespace wiFont
 {
 
 
-void LoadShaders()
-{
-	std::string path = wiRenderer::GetShaderPath();
-
-	wiRenderer::LoadShader(VS, vertexShader, "fontVS.cso");
-
-	wiRenderer::LoadShader(PS, pixelShader, "fontPS.cso");
-
-
-	PipelineStateDesc desc;
-	desc.vs = &vertexShader;
-	desc.ps = &pixelShader;
-	desc.bs = &blendState;
-	desc.dss = &depthStencilState;
-	desc.rs = &rasterizerState;
-	desc.pt = TRIANGLESTRIP;
-	wiRenderer::GetDevice()->CreatePipelineState(&desc, &PSO);
-}
-void Initialize()
-{
-	if (initialized)
+	void LoadShaders()
 	{
-		return;
+		std::string path = wiRenderer::GetShaderPath();
+
+		wiRenderer::LoadShader(VS, vertexShader, "fontVS.cso");
+
+		wiRenderer::LoadShader(PS, pixelShader, "fontPS.cso");
+
+
+		PipelineStateDesc desc;
+		desc.vs = &vertexShader;
+		desc.ps = &pixelShader;
+		desc.bs = &blendState;
+		desc.dss = &depthStencilState;
+		desc.rs = &rasterizerState;
+		desc.pt = TRIANGLESTRIP;
+		wiRenderer::GetDevice()->CreatePipelineState(&desc, &PSO);
 	}
-
-	// add default font if there is none yet:
-	if (fontStyles.empty())
+	void Initialize()
 	{
-		AddFontStyle((FONTPATH + "arial.ttf").c_str());
-	}
-
-	GraphicsDevice* device = wiRenderer::GetDevice();
-
-	{
-		GPUBufferDesc bd;
-		bd.Usage = USAGE_DYNAMIC;
-		bd.ByteWidth = sizeof(FontCB);
-		bd.BindFlags = BIND_CONSTANT_BUFFER;
-		bd.CPUAccessFlags = CPU_ACCESS_WRITE;
-
-		device->CreateBuffer(&bd, nullptr, &constantBuffer);
-	}
-
-
-
-	RasterizerStateDesc rs;
-	rs.FillMode = FILL_SOLID;
-	rs.CullMode = CULL_FRONT;
-	rs.FrontCounterClockwise = true;
-	rs.DepthBias = 0;
-	rs.DepthBiasClamp = 0;
-	rs.SlopeScaledDepthBias = 0;
-	rs.DepthClipEnable = false;
-	rs.MultisampleEnable = false;
-	rs.AntialiasedLineEnable = false;
-	device->CreateRasterizerState(&rs, &rasterizerState);
-
-	BlendStateDesc bd;
-	bd.RenderTarget[0].BlendEnable = true;
-	bd.RenderTarget[0].SrcBlend = BLEND_SRC_ALPHA;
-	bd.RenderTarget[0].DestBlend = BLEND_INV_SRC_ALPHA;
-	bd.RenderTarget[0].BlendOp = BLEND_OP_ADD;
-	bd.RenderTarget[0].SrcBlendAlpha = BLEND_ONE;
-	bd.RenderTarget[0].DestBlendAlpha = BLEND_ONE;
-	bd.RenderTarget[0].BlendOpAlpha = BLEND_OP_ADD;
-	bd.RenderTarget[0].RenderTargetWriteMask = COLOR_WRITE_ENABLE_ALL;
-	bd.IndependentBlendEnable = false;
-	device->CreateBlendState(&bd, &blendState);
-
-	DepthStencilStateDesc dsd;
-	dsd.DepthEnable = false;
-	dsd.StencilEnable = false;
-	device->CreateDepthStencilState(&dsd, &depthStencilState);
-
-	SamplerDesc samplerDesc;
-	samplerDesc.Filter = FILTER_MIN_MAG_LINEAR_MIP_POINT;
-	samplerDesc.AddressU = TEXTURE_ADDRESS_BORDER;
-	samplerDesc.AddressV = TEXTURE_ADDRESS_BORDER;
-	samplerDesc.AddressW = TEXTURE_ADDRESS_BORDER;
-	samplerDesc.MipLODBias = 0.0f;
-	samplerDesc.MaxAnisotropy = 0;
-	samplerDesc.ComparisonFunc = COMPARISON_NEVER;
-	samplerDesc.BorderColor[0] = 0;
-	samplerDesc.BorderColor[1] = 0;
-	samplerDesc.BorderColor[2] = 0;
-	samplerDesc.BorderColor[3] = 0;
-	samplerDesc.MinLOD = 0;
-	samplerDesc.MaxLOD = FLT_MAX;
-	device->CreateSampler(&samplerDesc, &sampler);
-
-	static wiEvent::Handle handle1 = wiEvent::Subscribe(SYSTEM_EVENT_RELOAD_SHADERS, [](uint64_t userdata) { LoadShaders(); });
-	LoadShaders();
-
-
-	static wiEvent::Handle handle2 = wiEvent::Subscribe(SYSTEM_EVENT_CHANGE_DPI, [](uint64_t userdata) {
-		glyphLock.lock();
-		for (auto& x : glyph_lookup)
+		if (initialized)
 		{
-			pendingGlyphs.insert(x.first);
-		}
-		glyph_lookup.clear();
-		rect_lookup.clear();
-		glyphLock.unlock();
-	});
-
-
-	wiBackLog::post("wiFont Initialized");
-	initialized.store(true);
-}
-
-void UpdatePendingGlyphs()
-{
-	glyphLock.lock();
-
-	// If there are pending glyphs, render them and repack the atlas:
-	if (!pendingGlyphs.empty())
-	{
-		// Pad the glyph rects in the atlas to avoid bleeding from nearby texels:
-		const int borderPadding = 1;
-
-		// Font resolution is upscaled to make it sharper:
-		const float upscaling = std::max(2.0f, wiPlatform::GetDPIScaling());
-
-		for (int32_t hash : pendingGlyphs)
-		{
-			const int code = codefromhash(hash);
-			const int style = stylefromhash(hash);
-			const float height = (float)heightfromhash(hash) * upscaling;
-			wiFontStyle& fontStyle = fontStyles[style];
-
-			float fontScaling = stbtt_ScaleForPixelHeight(&fontStyle.fontInfo, height);
-
-			// get bounding box for character (may be offset to account for chars that dip above or below the line
-			int left, top, right, bottom;
-			stbtt_GetCodepointBitmapBox(&fontStyle.fontInfo, code, fontScaling, fontScaling, &left, &top, &right, &bottom);
-
-			// Glyph dimensions are calculated without padding:
-			Glyph& glyph = glyph_lookup[hash];
-			glyph.x = float(left);
-			glyph.y = float(top) + float(fontStyle.ascent) * fontScaling;
-			glyph.width = float(right - left);
-			glyph.height = float(bottom - top);
-
-			// Remove dpi upscaling:
-			glyph.x = glyph.x / upscaling;
-			glyph.y = glyph.y / upscaling;
-			glyph.width = glyph.width / upscaling;
-			glyph.height = glyph.height / upscaling;
-
-			// Add padding to the rectangle that will be packed in the atlas:
-			right += borderPadding * 2;
-			bottom += borderPadding * 2;
-			rect_lookup[hash] = rect_ltrb(left, top, right, bottom);
-		}
-		pendingGlyphs.clear();
-
-		// This reference array will be used for packing:
-		vector<rect_xywh*> out_rects;
-		out_rects.reserve(rect_lookup.size());
-		for (auto& it : rect_lookup)
-		{
-			out_rects.push_back(&it.second);
+			return;
 		}
 
-		// Perform packing and process the result if successful:
-		std::vector<bin> bins;
-		if (pack(out_rects.data(), (int)out_rects.size(), 4096, bins))
+		// add default font if there is none yet:
+		if (fontStyles.empty())
 		{
-			assert(bins.size() == 1 && "The regions won't fit into one texture!");
+			AddFontStyle((FONTPATH + "arial.ttf").c_str());
+		}
 
-			// Retrieve texture atlas dimensions:
-			const int bitmapWidth = bins[0].size.w;
-			const int bitmapHeight = bins[0].size.h;
-			const float inv_width = 1.0f / bitmapWidth;
-			const float inv_height = 1.0f / bitmapHeight;
+		GraphicsDevice* device = wiRenderer::GetDevice();
 
-			// Create the CPU-side texture atlas and fill with transparency (0):
-			vector<uint8_t> bitmap(size_t(bitmapWidth) * size_t(bitmapHeight));
-			std::fill(bitmap.begin(), bitmap.end(), 0);
+		{
+			GPUBufferDesc bd;
+			bd.Usage = USAGE_DYNAMIC;
+			bd.ByteWidth = sizeof(FontCB);
+			bd.BindFlags = BIND_CONSTANT_BUFFER;
+			bd.CPUAccessFlags = CPU_ACCESS_WRITE;
 
-			// Iterate all packed glyph rectangles:
-			for (auto it : rect_lookup)
+			device->CreateBuffer(&bd, nullptr, &constantBuffer);
+		}
+
+
+
+		RasterizerStateDesc rs;
+		rs.FillMode = FILL_SOLID;
+		rs.CullMode = CULL_FRONT;
+		rs.FrontCounterClockwise = true;
+		rs.DepthBias = 0;
+		rs.DepthBiasClamp = 0;
+		rs.SlopeScaledDepthBias = 0;
+		rs.DepthClipEnable = false;
+		rs.MultisampleEnable = false;
+		rs.AntialiasedLineEnable = false;
+		device->CreateRasterizerState(&rs, &rasterizerState);
+
+		BlendStateDesc bd;
+		bd.RenderTarget[0].BlendEnable = true;
+		bd.RenderTarget[0].SrcBlend = BLEND_SRC_ALPHA;
+		bd.RenderTarget[0].DestBlend = BLEND_INV_SRC_ALPHA;
+		bd.RenderTarget[0].BlendOp = BLEND_OP_ADD;
+		bd.RenderTarget[0].SrcBlendAlpha = BLEND_ONE;
+		bd.RenderTarget[0].DestBlendAlpha = BLEND_ONE;
+		bd.RenderTarget[0].BlendOpAlpha = BLEND_OP_ADD;
+		bd.RenderTarget[0].RenderTargetWriteMask = COLOR_WRITE_ENABLE_ALL;
+		bd.IndependentBlendEnable = false;
+		device->CreateBlendState(&bd, &blendState);
+
+		DepthStencilStateDesc dsd;
+		dsd.DepthEnable = false;
+		dsd.StencilEnable = false;
+		device->CreateDepthStencilState(&dsd, &depthStencilState);
+
+		SamplerDesc samplerDesc;
+		samplerDesc.Filter = FILTER_MIN_MAG_LINEAR_MIP_POINT;
+		samplerDesc.AddressU = TEXTURE_ADDRESS_BORDER;
+		samplerDesc.AddressV = TEXTURE_ADDRESS_BORDER;
+		samplerDesc.AddressW = TEXTURE_ADDRESS_BORDER;
+		samplerDesc.MipLODBias = 0.0f;
+		samplerDesc.MaxAnisotropy = 0;
+		samplerDesc.ComparisonFunc = COMPARISON_NEVER;
+		samplerDesc.BorderColor[0] = 0;
+		samplerDesc.BorderColor[1] = 0;
+		samplerDesc.BorderColor[2] = 0;
+		samplerDesc.BorderColor[3] = 0;
+		samplerDesc.MinLOD = 0;
+		samplerDesc.MaxLOD = FLT_MAX;
+		device->CreateSampler(&samplerDesc, &sampler);
+
+		static wiEvent::Handle handle1 = wiEvent::Subscribe(SYSTEM_EVENT_RELOAD_SHADERS, [](uint64_t userdata) { LoadShaders(); });
+		LoadShaders();
+
+
+		static wiEvent::Handle handle2 = wiEvent::Subscribe(SYSTEM_EVENT_CHANGE_DPI, [](uint64_t userdata) {
+			glyphLock.lock();
+			for (auto& x : glyph_lookup)
 			{
-				const int32_t hash = it.first;
-				const wchar_t code = codefromhash(hash);
+				pendingGlyphs.insert(x.first);
+			}
+			glyph_lookup.clear();
+			rect_lookup.clear();
+			glyphLock.unlock();
+			});
+
+
+		wiBackLog::post("wiFont Initialized");
+		initialized.store(true);
+	}
+
+	void UpdatePendingGlyphs()
+	{
+		glyphLock.lock();
+
+		// If there are pending glyphs, render them and repack the atlas:
+		if (!pendingGlyphs.empty())
+		{
+			// Pad the glyph rects in the atlas to avoid bleeding from nearby texels:
+			const int borderPadding = 1;
+
+			// Font resolution is upscaled to make it sharper:
+			const float upscaling = std::max(2.0f, wiPlatform::GetDPIScaling());
+
+			for (int32_t hash : pendingGlyphs)
+			{
+				const int code = codefromhash(hash);
 				const int style = stylefromhash(hash);
 				const float height = (float)heightfromhash(hash) * upscaling;
-				const wiFontStyle& fontStyle = fontStyles[style];
-				rect_xywh& rect = it.second;
-				Glyph& glyph = glyph_lookup[hash];
-
-				// Remove border padding from the packed rectangle (we don't want to touch the border, it should stay transparent):
-				rect.x += borderPadding;
-				rect.y += borderPadding;
-				rect.w -= borderPadding * 2;
-				rect.h -= borderPadding * 2;
+				wiFontStyle& fontStyle = fontStyles[style];
 
 				float fontScaling = stbtt_ScaleForPixelHeight(&fontStyle.fontInfo, height);
 
-				// Render the glyph inside the CPU-side atlas:
-				int byteOffset = rect.x + (rect.y * bitmapWidth);
-				stbtt_MakeCodepointBitmap(&fontStyle.fontInfo, bitmap.data() + byteOffset, rect.w, rect.h, bitmapWidth, fontScaling, fontScaling, code);
+				// get bounding box for character (may be offset to account for chars that dip above or below the line
+				int left, top, right, bottom;
+				stbtt_GetCodepointBitmapBox(&fontStyle.fontInfo, code, fontScaling, fontScaling, &left, &top, &right, &bottom);
 
-				// Compute texture coordinates for the glyph:
-				float tc_left = float(rect.x);
-				float tc_right = tc_left + float(rect.w);
-				float tc_top = float(rect.y);
-				float tc_bottom = tc_top + float(rect.h);
+				// Glyph dimensions are calculated without padding:
+				Glyph& glyph = glyph_lookup[hash];
+				glyph.x = float(left);
+				glyph.y = float(top) + float(fontStyle.ascent) * fontScaling;
+				glyph.width = float(right - left);
+				glyph.height = float(bottom - top);
 
-				tc_left *= inv_width;
-				tc_right *= inv_width;
-				tc_top *= inv_height;
-				tc_bottom *= inv_height;
+				// Remove dpi upscaling:
+				glyph.x = glyph.x / upscaling;
+				glyph.y = glyph.y / upscaling;
+				glyph.width = glyph.width / upscaling;
+				glyph.height = glyph.height / upscaling;
 
-				glyph.tc_left = XMConvertFloatToHalf(tc_left);
-				glyph.tc_right = XMConvertFloatToHalf(tc_right);
-				glyph.tc_top = XMConvertFloatToHalf(tc_top);
-				glyph.tc_bottom = XMConvertFloatToHalf(tc_bottom);
+				// Add padding to the rectangle that will be packed in the atlas:
+				right += borderPadding * 2;
+				bottom += borderPadding * 2;
+				rect_lookup[hash] = rect_ltrb(left, top, right, bottom);
+			}
+			pendingGlyphs.clear();
+
+			// This reference array will be used for packing:
+			vector<rect_xywh*> out_rects;
+			out_rects.reserve(rect_lookup.size());
+			for (auto& it : rect_lookup)
+			{
+				out_rects.push_back(&it.second);
 			}
 
-			// Upload the CPU-side texture atlas bitmap to the GPU:
-			wiTextureHelper::CreateTexture(texture, bitmap.data(), bitmapWidth, bitmapHeight, FORMAT_R8_UNORM);
+			// Perform packing and process the result if successful:
+			std::vector<bin> bins;
+			if (pack(out_rects.data(), (int)out_rects.size(), 4096, bins))
+			{
+				assert(bins.size() == 1 && "The regions won't fit into one texture!");
+
+				// Retrieve texture atlas dimensions:
+				const int bitmapWidth = bins[0].size.w;
+				const int bitmapHeight = bins[0].size.h;
+				const float inv_width = 1.0f / bitmapWidth;
+				const float inv_height = 1.0f / bitmapHeight;
+
+				// Create the CPU-side texture atlas and fill with transparency (0):
+				vector<uint8_t> bitmap(size_t(bitmapWidth) * size_t(bitmapHeight));
+				std::fill(bitmap.begin(), bitmap.end(), 0);
+
+				// Iterate all packed glyph rectangles:
+				for (auto it : rect_lookup)
+				{
+					const int32_t hash = it.first;
+					const wchar_t code = codefromhash(hash);
+					const int style = stylefromhash(hash);
+					const float height = (float)heightfromhash(hash) * upscaling;
+					const wiFontStyle& fontStyle = fontStyles[style];
+					rect_xywh& rect = it.second;
+					Glyph& glyph = glyph_lookup[hash];
+
+					// Remove border padding from the packed rectangle (we don't want to touch the border, it should stay transparent):
+					rect.x += borderPadding;
+					rect.y += borderPadding;
+					rect.w -= borderPadding * 2;
+					rect.h -= borderPadding * 2;
+
+					float fontScaling = stbtt_ScaleForPixelHeight(&fontStyle.fontInfo, height);
+
+					// Render the glyph inside the CPU-side atlas:
+					int byteOffset = rect.x + (rect.y * bitmapWidth);
+					stbtt_MakeCodepointBitmap(&fontStyle.fontInfo, bitmap.data() + byteOffset, rect.w, rect.h, bitmapWidth, fontScaling, fontScaling, code);
+
+					// Compute texture coordinates for the glyph:
+					float tc_left = float(rect.x);
+					float tc_right = tc_left + float(rect.w);
+					float tc_top = float(rect.y);
+					float tc_bottom = tc_top + float(rect.h);
+
+					tc_left *= inv_width;
+					tc_right *= inv_width;
+					tc_top *= inv_height;
+					tc_bottom *= inv_height;
+
+					glyph.tc_left = XMConvertFloatToHalf(tc_left);
+					glyph.tc_right = XMConvertFloatToHalf(tc_right);
+					glyph.tc_top = XMConvertFloatToHalf(tc_top);
+					glyph.tc_bottom = XMConvertFloatToHalf(tc_bottom);
+				}
+
+				// Upload the CPU-side texture atlas bitmap to the GPU:
+				wiTextureHelper::CreateTexture(texture, bitmap.data(), bitmapWidth, bitmapHeight, FORMAT_R8_UNORM);
+			}
 		}
+
+		glyphLock.unlock();
+	}
+	const Texture* GetAtlas()
+	{
+		return &texture;
+	}
+	const std::string& GetFontPath()
+	{
+		return FONTPATH;
+	}
+	void SetFontPath(const std::string& path)
+	{
+		FONTPATH = path;
+	}
+	int AddFontStyle(const std::string& fontName)
+	{
+		for (size_t i = 0; i < fontStyles.size(); i++)
+		{
+			const wiFontStyle& fontStyle = fontStyles[i];
+			if (!fontStyle.name.compare(fontName))
+			{
+				return int(i);
+			}
+		}
+		fontStyles.emplace_back();
+		fontStyles.back().Create(fontName);
+		return int(fontStyles.size() - 1);
 	}
 
-	glyphLock.unlock();
-}
-const Texture* GetAtlas()
-{
-	return &texture;
-}
-const std::string& GetFontPath()
-{
-	return FONTPATH;
-}
-void SetFontPath(const std::string& path)
-{
-	FONTPATH = path;
-}
-int AddFontStyle(const std::string& fontName)
-{
-	for (size_t i = 0; i < fontStyles.size(); i++)
+
+	template<typename T>
+	float textWidth_internal(const T* text, const wiFontParams& params)
 	{
-		const wiFontStyle& fontStyle = fontStyles[i];
-		if (!fontStyle.name.compare(fontName))
+		if (params.style >= (int)fontStyles.size())
 		{
-			return int(i);
-		}
-	}
-	fontStyles.emplace_back();
-	fontStyles.back().Create(fontName);
-	return int(fontStyles.size() - 1);
-}
-
-
-template<typename T>
-float textWidth_internal(const T* text, const wiFontParams& params)
-{
-	if (params.style >= (int)fontStyles.size())
-	{
-		return 0;
-	}
-
-	float maxWidth = 0;
-	float currentLineWidth = 0;
-	size_t i = 0;
-	while (text[i] != 0)
-	{
-		int code = (int)text[i++];
-		const int32_t hash = glyphhash(code, params.style, params.size);
-
-		if (glyph_lookup.count(hash) == 0)
-		{
-			// glyph not packed yet, we just continue (it will be added if it is actually rendered)
-			continue;
+			return 0;
 		}
 
-		if (code == '\n')
+		float maxWidth = 0;
+		float currentLineWidth = 0;
+		size_t i = 0;
+		while (text[i] != 0)
 		{
-			currentLineWidth = 0;
+			int code = (int)text[i++];
+			const int32_t hash = glyphhash(code, params.style, params.size);
+
+			if (glyph_lookup.count(hash) == 0)
+			{
+				// glyph not packed yet, we just continue (it will be added if it is actually rendered)
+				continue;
+			}
+
+			if (code == '\n')
+			{
+				currentLineWidth = 0;
+			}
+			else if (code == ' ')
+			{
+				currentLineWidth += WHITESPACE_SIZE;
+			}
+			else if (code == '\t')
+			{
+				currentLineWidth += TAB_SIZE;
+			}
+			else
+			{
+				const Glyph& glyph = glyph_lookup.at(hash);
+				currentLineWidth += glyph.width + float(params.spacingX) * params.scaling;
+			}
+			maxWidth = std::max(maxWidth, currentLineWidth);
 		}
-		else if (code == ' ')
-		{
-			currentLineWidth += WHITESPACE_SIZE;
-		}
-		else if (code == '\t')
-		{
-			currentLineWidth += TAB_SIZE;
-		}
-		else
-		{
-			const Glyph& glyph = glyph_lookup.at(hash);
-			currentLineWidth += glyph.width + float(params.spacingX) * params.scaling;
-		}
-		maxWidth = std::max(maxWidth, currentLineWidth);
+
+		return maxWidth;
 	}
 
-	return maxWidth;
-}
-
-template<typename T>
-float textHeight_internal(const T* text, const wiFontParams& params)
-{
-	if (params.style >= (int)fontStyles.size())
+	template<typename T>
+	float textHeight_internal(const T* text, const wiFontParams& params)
 	{
-		return 0;
-	}
-
-	float height = LINEBREAK_SIZE;
-	size_t i = 0;
-	while (text[i] != 0)
-	{
-		int code = (int)text[i++];
-		if (code == '\n')
+		if (params.style >= (int)fontStyles.size())
 		{
-			height += LINEBREAK_SIZE;
+			return 0;
 		}
-	}
 
-	return height;
-}
-
-template<typename T>
-void Draw_internal(const T* text, size_t text_length, const wiFontParams& params, CommandList cmd)
-{
-	if (text_length <= 0 || !initialized.load())
-	{
-		return;
-	}
-
-	wiFontParams newProps = params;
-
-	if (params.h_align == WIFALIGN_CENTER)
-		newProps.posX -= textWidth_internal(text, newProps) / 2;
-	else if (params.h_align == WIFALIGN_RIGHT)
-		newProps.posX -= textWidth_internal(text, newProps);
-	if (params.v_align == WIFALIGN_CENTER)
-		newProps.posY -= textHeight_internal(text, newProps) / 2;
-	else if (params.v_align == WIFALIGN_BOTTOM)
-		newProps.posY -= textHeight_internal(text, newProps);
-
-	GraphicsDevice* device = wiRenderer::GetDevice();
-
-	GraphicsDevice::GPUAllocation mem = device->AllocateGPU(sizeof(FontVertex) * text_length * 4, cmd);
-	if (!mem.IsValid())
-	{
-		return;
-	}
-	volatile FontVertex* textBuffer = (volatile FontVertex*)mem.data;
-	const uint32_t quadCount = WriteVertices(textBuffer, text, newProps);
-
-	if (quadCount > 0)
-	{
-		device->EventBegin("Font", cmd);
-
-		device->BindPipelineState(&PSO, cmd);
-
-		device->BindConstantBuffer(VS, &constantBuffer, CB_GETBINDSLOT(FontCB), cmd);
-		device->BindConstantBuffer(PS, &constantBuffer, CB_GETBINDSLOT(FontCB), cmd);
-		device->BindResource(PS, &texture, TEXSLOT_FONTATLAS, cmd);
-		device->BindSampler(PS, &sampler, SSLOT_ONDEMAND1, cmd);
-
-		device->BindResource(VS, mem.buffer, 0, cmd);
-
-		FontCB cb;
-		cb.g_xFont_BufferOffset = mem.offset;
-
-		XMMATRIX Projection = device->GetScreenProjection();
-
-		if (newProps.shadowColor.getA() > 0)
+		float height = LINEBREAK_SIZE;
+		size_t i = 0;
+		while (text[i] != 0)
 		{
-			// font shadow render:
+			int code = (int)text[i++];
+			if (code == '\n')
+			{
+				height += LINEBREAK_SIZE;
+			}
+		}
+
+		return height;
+	}
+
+	template<typename T>
+	void Draw_internal(const T* text, size_t text_length, const wiFontParams& params, CommandList cmd)
+	{
+		if (text_length <= 0 || !initialized.load())
+		{
+			return;
+		}
+
+		wiFontParams newProps = params;
+
+		if (params.h_align == WIFALIGN_CENTER)
+			newProps.posX -= textWidth_internal(text, newProps) / 2;
+		else if (params.h_align == WIFALIGN_RIGHT)
+			newProps.posX -= textWidth_internal(text, newProps);
+		if (params.v_align == WIFALIGN_CENTER)
+			newProps.posY -= textHeight_internal(text, newProps) / 2;
+		else if (params.v_align == WIFALIGN_BOTTOM)
+			newProps.posY -= textHeight_internal(text, newProps);
+
+		GraphicsDevice* device = wiRenderer::GetDevice();
+
+		GraphicsDevice::GPUAllocation mem = device->AllocateGPU(sizeof(FontVertex) * text_length * 4, cmd);
+		if (!mem.IsValid())
+		{
+			return;
+		}
+		volatile FontVertex* textBuffer = (volatile FontVertex*)mem.data;
+		const uint32_t quadCount = WriteVertices(textBuffer, text, newProps);
+
+		if (quadCount > 0)
+		{
+			device->EventBegin("Font", cmd);
+
+			device->BindPipelineState(&PSO, cmd);
+
+			device->BindConstantBuffer(VS, &constantBuffer, CB_GETBINDSLOT(FontCB), cmd);
+			device->BindConstantBuffer(PS, &constantBuffer, CB_GETBINDSLOT(FontCB), cmd);
+			device->BindResource(PS, &texture, TEXSLOT_FONTATLAS, cmd);
+			device->BindSampler(PS, &sampler, SSLOT_ONDEMAND1, cmd);
+
+			device->BindResource(VS, mem.buffer, 0, cmd);
+
+			FontCB cb;
+			cb.g_xFont_BufferOffset = mem.offset;
+
+			XMMATRIX Projection = device->GetScreenProjection();
+
+			if (newProps.shadowColor.getA() > 0)
+			{
+				// font shadow render:
+				XMStoreFloat4x4(&cb.g_xFont_Transform,
+					XMMatrixTranslation((float)newProps.posX + 1, (float)newProps.posY + 1, 0)
+					* Projection
+				);
+				cb.g_xFont_Color = newProps.shadowColor.toFloat4();
+				device->UpdateBuffer(&constantBuffer, &cb, cmd);
+
+				device->DrawInstanced(4, quadCount, 0, 0, cmd);
+			}
+
+			if (newProps.outlineColor.getA() > 0)
+			{
+				// font outline render:
+				XMStoreFloat4x4(&cb.g_xFont_Transform,
+					XMMatrixTranslation((float)newProps.posX - 1, (float)newProps.posY, 0)
+					* Projection
+				);
+				cb.g_xFont_Color = newProps.outlineColor.toFloat4();
+				device->UpdateBuffer(&constantBuffer, &cb, cmd);
+
+				device->DrawInstanced(4, quadCount, 0, 0, cmd);
+
+				XMStoreFloat4x4(&cb.g_xFont_Transform,
+					XMMatrixTranslation((float)newProps.posX, (float)newProps.posY - 1, 0)
+					* Projection
+				);
+				cb.g_xFont_Color = newProps.outlineColor.toFloat4();
+				device->UpdateBuffer(&constantBuffer, &cb, cmd);
+
+				device->DrawInstanced(4, quadCount, 0, 0, cmd);
+
+				XMStoreFloat4x4(&cb.g_xFont_Transform,
+					XMMatrixTranslation((float)newProps.posX + 1, (float)newProps.posY, 0)
+					* Projection
+				);
+				cb.g_xFont_Color = newProps.outlineColor.toFloat4();
+				device->UpdateBuffer(&constantBuffer, &cb, cmd);
+
+				device->DrawInstanced(4, quadCount, 0, 0, cmd);
+
+				XMStoreFloat4x4(&cb.g_xFont_Transform,
+					XMMatrixTranslation((float)newProps.posX, (float)newProps.posY + 1, 0)
+					* Projection
+				);
+				cb.g_xFont_Color = newProps.outlineColor.toFloat4();
+				device->UpdateBuffer(&constantBuffer, &cb, cmd);
+
+				device->DrawInstanced(4, quadCount, 0, 0, cmd);
+			}
+
+			// font base render:
 			XMStoreFloat4x4(&cb.g_xFont_Transform,
-				XMMatrixTranslation((float)newProps.posX + 1, (float)newProps.posY + 1, 0)
+				XMMatrixTranslation((float)newProps.posX, (float)newProps.posY, 0)
 				* Projection
 			);
-			cb.g_xFont_Color = newProps.shadowColor.toFloat4();
+			cb.g_xFont_Color = newProps.color.toFloat4();
 			device->UpdateBuffer(&constantBuffer, &cb, cmd);
 
 			device->DrawInstanced(4, quadCount, 0, 0, cmd);
+
+			device->EventEnd(cmd);
 		}
 
-		// font base render:
-		XMStoreFloat4x4(&cb.g_xFont_Transform,
-			XMMatrixTranslation((float)newProps.posX, (float)newProps.posY, 0)
-			* Projection
-		);
-		cb.g_xFont_Color = newProps.color.toFloat4();
-		device->UpdateBuffer(&constantBuffer, &cb, cmd);
-
-		device->DrawInstanced(4, quadCount, 0, 0, cmd);
-
-		device->EventEnd(cmd);
+		UpdatePendingGlyphs();
 	}
 
-	UpdatePendingGlyphs();
-}
-
-void Draw(const char* text, const wiFontParams& params, CommandList cmd)
-{
-	size_t text_length = strlen(text);
-	if (text_length == 0)
+	void Draw(const char* text, const wiFontParams& params, CommandList cmd)
 	{
-		return;
+		size_t text_length = strlen(text);
+		if (text_length == 0)
+		{
+			return;
+		}
+		Draw_internal(text, text_length, params, cmd);
 	}
-	Draw_internal(text, text_length, params, cmd);
-}
-void Draw(const wchar_t* text, const wiFontParams& params, CommandList cmd)
-{
-	size_t text_length = wcslen(text);
-	if (text_length == 0)
+	void Draw(const wchar_t* text, const wiFontParams& params, CommandList cmd)
 	{
-		return;
+		size_t text_length = wcslen(text);
+		if (text_length == 0)
+		{
+			return;
+		}
+		Draw_internal(text, text_length, params, cmd);
 	}
-	Draw_internal(text, text_length, params, cmd);
-}
-void Draw(const string& text, const wiFontParams& params, CommandList cmd)
-{
-	Draw_internal(text.c_str(), text.length(), params, cmd);
-}
-void Draw(const wstring& text, const wiFontParams& params, CommandList cmd)
-{
-	Draw_internal(text.c_str(), text.length(), params, cmd);
-}
+	void Draw(const string& text, const wiFontParams& params, CommandList cmd)
+	{
+		Draw_internal(text.c_str(), text.length(), params, cmd);
+	}
+	void Draw(const wstring& text, const wiFontParams& params, CommandList cmd)
+	{
+		Draw_internal(text.c_str(), text.length(), params, cmd);
+	}
 
-float textWidth(const char* text, const wiFontParams& params)
-{
-	return textWidth_internal(text, params);
-}
-float textWidth(const wchar_t* text, const wiFontParams& params)
-{
-	return textWidth_internal(text, params);
-}
-float textWidth(const string& text, const wiFontParams& params)
-{
-	return textWidth_internal(text.c_str(), params);
-}
-float textWidth(const wstring& text, const wiFontParams& params)
-{
-	return textWidth_internal(text.c_str(), params);
-}
+	float textWidth(const char* text, const wiFontParams& params)
+	{
+		return textWidth_internal(text, params);
+	}
+	float textWidth(const wchar_t* text, const wiFontParams& params)
+	{
+		return textWidth_internal(text, params);
+	}
+	float textWidth(const string& text, const wiFontParams& params)
+	{
+		return textWidth_internal(text.c_str(), params);
+	}
+	float textWidth(const wstring& text, const wiFontParams& params)
+	{
+		return textWidth_internal(text.c_str(), params);
+	}
 
-float textHeight(const char* text, const wiFontParams& params)
-{
-	return textHeight_internal(text, params);
-}
-float textHeight(const wchar_t* text, const wiFontParams& params)
-{
-	return textHeight_internal(text, params);
-}
-float textHeight(const string& text, const wiFontParams& params)
-{
-	return textHeight_internal(text.c_str(), params);
-}
-float textHeight(const wstring& text, const wiFontParams& params)
-{
-	return textHeight_internal(text.c_str(), params);
-}
+	float textHeight(const char* text, const wiFontParams& params)
+	{
+		return textHeight_internal(text, params);
+	}
+	float textHeight(const wchar_t* text, const wiFontParams& params)
+	{
+		return textHeight_internal(text, params);
+	}
+	float textHeight(const string& text, const wiFontParams& params)
+	{
+		return textHeight_internal(text.c_str(), params);
+	}
+	float textHeight(const wstring& text, const wiFontParams& params)
+	{
+		return textHeight_internal(text.c_str(), params);
+	}
 
 }
