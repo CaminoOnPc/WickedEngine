@@ -135,7 +135,6 @@ namespace wiFont_Internal
 		size_t i = 0;
 		while (text[i] != 0)
 		{
-			int code = (int)text[i++];
 			T character = text[i++];
 			int code = (int)character;
 			const int32_t hash = glyphhash(code, params.style, params.size);
