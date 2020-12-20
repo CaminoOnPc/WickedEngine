@@ -58,6 +58,7 @@ for item in root.iter():
             cmd += "_6_5 "
             
             cmd += " -spirv "
+            cmd += " -fspv-target-env=vulkan1.2 "
             cmd += " -fvk-use-dx-layout "
             cmd += " -fvk-use-dx-position-w "
             cmd += " -flegacy-macro-expansion "
@@ -65,15 +66,12 @@ for item in root.iter():
             if profile == "VS" or profile == "DS" or profile == "GS":
                 cmd += " -fvk-invert-y "
 
-            if profile == "LIB":
-                cmd += " -fspv-target-env=vulkan1.2 "
-            else:
-                cmd += " -fspv-target-env=vulkan1.1 "
-
             #cmd += " -fvk-b-shift 0 all "
             cmd += " -fvk-t-shift 1000 all "
             cmd += " -fvk-u-shift 2000 all "
             cmd += " -fvk-s-shift 3000 all "
+
+            cmd += " -Vd " #DISABLE VALIDATION: There is currently a validation bug with raytracing RayTCurrent()!!!
             
             cmd += " -D SPIRV "
 

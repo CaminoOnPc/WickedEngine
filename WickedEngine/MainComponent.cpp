@@ -227,13 +227,16 @@ void MainComponent::Run()
 		wiProfiler::EndFrame(cmd); // End before Present() so that GPU queries are properly recorded
 	}
 	wiRenderer::GetDevice()->PresentEnd(cmd);
-
-	wiRenderer::EndFrame();
 }
 
 void MainComponent::Update(float dt)
 {
 	auto range = wiProfiler::BeginRangeCPU("Update");
+
+	if (GetActivePath() != nullptr)
+	{
+		GetActivePath()->PreUpdate();
+	}
 
 	wiLua::SetDeltaTime(double(dt));
 	wiLua::Update();
@@ -241,6 +244,7 @@ void MainComponent::Update(float dt)
 	if (GetActivePath() != nullptr)
 	{
 		GetActivePath()->Update(dt);
+		GetActivePath()->PostUpdate();
 	}
 
 	wiProfiler::EndRange(range); // Update

@@ -140,7 +140,6 @@ set(SHADERS_CS
 		"volumetricCloud_finalCS.hlsl"
 		"shadingRateClassificationCS.hlsl"
 		"shadingRateClassificationCS_DEBUG.hlsl"
-        "denoiseCS.hlsl"
         "skyAtmosphere_transmittanceLutCS.hlsl"
         "skyAtmosphere_skyViewLutCS.hlsl"
         "skyAtmosphere_multiScatteredLuminanceLutCS.hlsl"
@@ -161,7 +160,6 @@ set(SHADERS_PS
         "imagePS.hlsl"
         "emittedparticlePS_soft_lighting.hlsl"
         "oceanSurfacePS.hlsl"
-        "deferredPS.hlsl"
         "hairparticlePS.hlsl"
         "impostorPS.hlsl"
         "volumetricLight_SpotPS.hlsl"
@@ -171,8 +169,6 @@ set(SHADERS_PS
         "vertexcolorPS.hlsl"
         "upsample_bilateralPS.hlsl"
         "sunPS.hlsl"
-        "sssPS.hlsl"
-        "sssPS_snow.hlsl"
         "skyPS_dynamic.hlsl"
         "skyPS_static.hlsl"
         "shadowPS_transparent.hlsl"
@@ -239,11 +235,7 @@ set(SHADERS_VS
         "volumetriclight_pointVS.hlsl"
         "volumetriclight_spotVS.hlsl"
         "vSpotLightVS.hlsl"
-        "vTubeLightVS.hlsl"
-        "vDiscLightVS.hlsl"
         "vPointLightVS.hlsl"
-        "vRectangleLightVS.hlsl"
-        "vSphereLightVS.hlsl"
         "sphereVS.hlsl"
         "skyVS.hlsl"
         "shadowVS_transparent.hlsl"
@@ -328,6 +320,7 @@ function(Generate_Shaders SHADERS_SRC_LIST SHADER_TYPE)
                 -fvk-u-shift 2000 all
                 -fvk-s-shift 3000 all
                 #-fspv-extension=KHR
+				-Vd #DISABLE VALIDATION: There is currently a validation bug with raytracing RayTCurrent()!!!
                 )
 
         # Determine include dependencies (recursively)

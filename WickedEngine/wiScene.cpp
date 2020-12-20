@@ -8,6 +8,7 @@
 #include "wiJobSystem.h"
 #include "wiSpinLock.h"
 #include "wiHelper.h"
+#include "wiRenderer.h"
 
 #include <functional>
 #include <unordered_map>
@@ -274,6 +275,7 @@ namespace wiScene
 	void MaterialComponent::WriteShaderMaterial(ShaderMaterial* dest) const
 	{
 		dest->baseColor = baseColor;
+		dest->specularColor = specularColor;
 		dest->emissiveColor = emissiveColor;
 		dest->texMulAdd = texMulAdd;
 		dest->roughness = roughness;
@@ -283,6 +285,14 @@ namespace wiScene
 		dest->normalMapStrength = (normalMap == nullptr ? 0 : normalMapStrength);
 		dest->parallaxOcclusionMapping = parallaxOcclusionMapping;
 		dest->displacementMapping = displacementMapping;
+		dest->subsurfaceScattering = subsurfaceScattering;
+		dest->subsurfaceScattering.x *= dest->subsurfaceScattering.w;
+		dest->subsurfaceScattering.y *= dest->subsurfaceScattering.w;
+		dest->subsurfaceScattering.z *= dest->subsurfaceScattering.w;
+		dest->subsurfaceScattering_inv.x = 1.0f / ((1 + dest->subsurfaceScattering.x) * (1 + dest->subsurfaceScattering.x));
+		dest->subsurfaceScattering_inv.y = 1.0f / ((1 + dest->subsurfaceScattering.y) * (1 + dest->subsurfaceScattering.y));
+		dest->subsurfaceScattering_inv.z = 1.0f / ((1 + dest->subsurfaceScattering.z) * (1 + dest->subsurfaceScattering.z));
+		dest->subsurfaceScattering_inv.w = 1.0f / ((1 + dest->subsurfaceScattering.w) * (1 + dest->subsurfaceScattering.w));
 		dest->uvset_baseColorMap = baseColorMap == nullptr ? -1 : (int)uvset_baseColorMap;
 		dest->uvset_surfaceMap = surfaceMap == nullptr ? -1 : (int)uvset_surfaceMap;
 		dest->uvset_normalMap = normalMap == nullptr ? -1 : (int)uvset_normalMap;
@@ -290,6 +300,7 @@ namespace wiScene
 		dest->uvset_emissiveMap = emissiveMap == nullptr ? -1 : (int)uvset_emissiveMap;
 		dest->uvset_occlusionMap = occlusionMap == nullptr ? -1 : (int)uvset_occlusionMap;
 		dest->alphaTest = 1 - alphaRef + 1.0f / 256.0f; // 256 so that it is just about smaller than 1 unorm unit (1.0/255.0)
+		dest->layerMask = layerMask;
 		dest->options = 0;
 		if (IsUsingVertexColors())
 		{
@@ -336,12 +347,6 @@ namespace wiScene
 	}
 	void MaterialComponent::CreateRenderData(const std::string& content_dir)
 	{
-		GPUBufferDesc desc;
-		desc.Usage = USAGE_DEFAULT;
-		desc.BindFlags = BIND_CONSTANT_BUFFER;
-		desc.ByteWidth = sizeof(MaterialCB);
-		wiRenderer::GetDevice()->CreateBuffer(&desc, nullptr, &constantBuffer);
-
 		if (!baseColorMapName.empty())
 		{
 			baseColorMap = wiResourceManager::Load(content_dir + baseColorMapName);
@@ -366,6 +371,23 @@ namespace wiScene
 		{
 			occlusionMap = wiResourceManager::Load(content_dir + occlusionMapName);
 		}
+
+
+		ShaderMaterial shadermat;
+		WriteShaderMaterial(&shadermat);
+
+		SubresourceData data;
+		data.pSysMem = &shadermat;
+
+		GPUBufferDesc desc;
+		desc.Usage = USAGE_DEFAULT;
+		desc.BindFlags = BIND_CONSTANT_BUFFER;
+		desc.ByteWidth = sizeof(MaterialCB);
+		wiRenderer::GetDevice()->CreateBuffer(&desc, &data, &constantBuffer);
+	}
+	uint32_t MaterialComponent::GetStencilRef() const
+	{
+		return wiRenderer::CombineStencilrefs(engineStencilRef, userStencilRef);
 	}
 
 	void MeshComponent::CreateRenderData()
@@ -589,9 +611,12 @@ namespace wiScene
 			device->CreateBuffer(&bd, nullptr, &streamoutBuffer_POS);
 			device->SetName(&streamoutBuffer_POS, "streamoutBuffer_POS");
 
-			bd.ByteWidth = (uint32_t)(sizeof(Vertex_TAN) * vertex_tangents.size());
-			device->CreateBuffer(&bd, nullptr, &streamoutBuffer_TAN);
-			device->SetName(&streamoutBuffer_TAN, "streamoutBuffer_TAN");
+			if (!vertex_tangents.empty())
+			{
+				bd.ByteWidth = (uint32_t)(sizeof(Vertex_TAN) * vertex_tangents.size());
+				device->CreateBuffer(&bd, nullptr, &streamoutBuffer_TAN);
+				device->SetName(&streamoutBuffer_TAN, "streamoutBuffer_TAN");
+			}
 		}
 
 		// vertexBuffer - UV SET 0
@@ -1325,18 +1350,19 @@ namespace wiScene
 	void Scene::Update(float dt)
 	{
 		GraphicsDevice* device = wiRenderer::GetDevice();
-		if (device->CheckCapability(GRAPHICSDEVICE_CAPABILITY_DESCRIPTOR_MANAGEMENT) && !descriptorTable.IsValid())
+		if (device->CheckCapability(GRAPHICSDEVICE_CAPABILITY_DESCRIPTOR_MANAGEMENT) && !descriptorTables[0].IsValid())
 		{
-			descriptorTable.resources.resize(DESCRIPTORTABLE_ENTRY_COUNT);
-			descriptorTable.resources[DESCRIPTORTABLE_ENTRY_SUBSETS_MATERIAL] = { CONSTANTBUFFER, 0, MAX_DESCRIPTOR_INDEXING };
-			descriptorTable.resources[DESCRIPTORTABLE_ENTRY_SUBSETS_TEXTURE_BASECOLOR] = { TEXTURE2D, 0, MAX_DESCRIPTOR_INDEXING };
-			descriptorTable.resources[DESCRIPTORTABLE_ENTRY_SUBSETS_INDEXBUFFER] = { TYPEDBUFFER, MAX_DESCRIPTOR_INDEXING, MAX_DESCRIPTOR_INDEXING };
-			descriptorTable.resources[DESCRIPTORTABLE_ENTRY_SUBSETS_VERTEXBUFFER_POSITION_NORMAL_WIND] = { RAWBUFFER, MAX_DESCRIPTOR_INDEXING * 2, MAX_DESCRIPTOR_INDEXING };
-			descriptorTable.resources[DESCRIPTORTABLE_ENTRY_SUBSETS_VERTEXBUFFER_UV0] = { TYPEDBUFFER, MAX_DESCRIPTOR_INDEXING * 3, MAX_DESCRIPTOR_INDEXING };
-			descriptorTable.resources[DESCRIPTORTABLE_ENTRY_SUBSETS_VERTEXBUFFER_UV1] = { TYPEDBUFFER, MAX_DESCRIPTOR_INDEXING * 4, MAX_DESCRIPTOR_INDEXING };
+			descriptorTables[DESCRIPTORTABLE_SUBSETS_MATERIAL].resources.push_back({ CONSTANTBUFFER, 0, MAX_SUBSET_DESCRIPTOR_INDEXING });
+			descriptorTables[DESCRIPTORTABLE_SUBSETS_TEXTURES].resources.push_back({ TEXTURE2D, 0, MAX_SUBSET_DESCRIPTOR_INDEXING * MATERIAL_TEXTURE_SLOT_DESCRIPTOR_COUNT });
+			descriptorTables[DESCRIPTORTABLE_SUBSETS_INDEXBUFFER].resources.push_back({ TYPEDBUFFER, 0, MAX_SUBSET_DESCRIPTOR_INDEXING });
+			descriptorTables[DESCRIPTORTABLE_SUBSETS_VERTEXBUFFER_RAW].resources.push_back({ RAWBUFFER, 0, MAX_SUBSET_DESCRIPTOR_INDEXING * VERTEXBUFFER_DESCRIPTOR_RAW_COUNT });
+			descriptorTables[DESCRIPTORTABLE_SUBSETS_VERTEXBUFFER_UVSETS].resources.push_back({ TYPEDBUFFER, 0, MAX_SUBSET_DESCRIPTOR_INDEXING * VERTEXBUFFER_DESCRIPTOR_UV_COUNT });
 
-			bool success = device->CreateDescriptorTable(&descriptorTable);
-			assert(success);
+			for (int i = 0; i < DESCRIPTORTABLE_COUNT; ++i)
+			{
+				bool success = device->CreateDescriptorTable(&descriptorTables[i]);
+				assert(success);
+			}
 		}
 
 		wiJobSystem::context ctx;
@@ -1621,7 +1647,8 @@ namespace wiScene
 		const XMFLOAT3& position,
 		const XMFLOAT3& color,
 		float energy,
-		float range)
+		float range,
+		LightComponent::LightType type)
 	{
 		Entity entity = CreateEntity();
 
@@ -1640,7 +1667,7 @@ namespace wiScene
 		light.range_local = range;
 		light.fov = XM_PIDIV4;
 		light.color = color;
-		light.SetType(LightComponent::POINT);
+		light.SetType(type);
 
 		return entity;
 	}
@@ -2100,7 +2127,7 @@ namespace wiScene
 			LayerComponent* layer_parent = layers.GetComponent(parentcomponent.parentID);
 			if (layer_child != nullptr && layer_parent != nullptr)
 			{
-				layer_child->layerMask = parentcomponent.layerMask_bind & layer_parent->GetLayerMask();
+				layer_child->layerMask &= layer_parent->GetLayerMask();
 			}
 
 		}
@@ -2359,45 +2386,87 @@ namespace wiScene
 				const MaterialComponent* material = materials.GetComponent(subset.materialID);
 				if (material != nullptr)
 				{
-					if (descriptorTable.IsValid())
+					if (descriptorTables[0].IsValid())
 					{
 						uint32_t global_geometryIndex = mesh.TLAS_geometryOffset + subsetIndex;
 						device->WriteDescriptor(
-							&descriptorTable,
-							DESCRIPTORTABLE_ENTRY_SUBSETS_MATERIAL,
+							&descriptorTables[DESCRIPTORTABLE_SUBSETS_MATERIAL],
+							0,
 							global_geometryIndex,
 							&material->constantBuffer
 						);
 						device->WriteDescriptor(
-							&descriptorTable,
-							DESCRIPTORTABLE_ENTRY_SUBSETS_TEXTURE_BASECOLOR,
-							global_geometryIndex,
+							&descriptorTables[DESCRIPTORTABLE_SUBSETS_TEXTURES],
+							0,
+							global_geometryIndex * MATERIAL_TEXTURE_SLOT_DESCRIPTOR_COUNT + MATERIAL_TEXTURE_SLOT_DESCRIPTOR_BASECOLOR,
 							material->baseColorMap ? material->baseColorMap->texture : nullptr
 						);
 						device->WriteDescriptor(
-							&descriptorTable,
-							DESCRIPTORTABLE_ENTRY_SUBSETS_INDEXBUFFER,
+							&descriptorTables[DESCRIPTORTABLE_SUBSETS_TEXTURES],
+							0,
+							global_geometryIndex * MATERIAL_TEXTURE_SLOT_DESCRIPTOR_COUNT + MATERIAL_TEXTURE_SLOT_DESCRIPTOR_NORMAL,
+							material->normalMap ? material->normalMap->texture : nullptr
+						);
+						device->WriteDescriptor(
+							&descriptorTables[DESCRIPTORTABLE_SUBSETS_TEXTURES],
+							0,
+							global_geometryIndex * MATERIAL_TEXTURE_SLOT_DESCRIPTOR_COUNT + MATERIAL_TEXTURE_SLOT_DESCRIPTOR_SURFACE,
+							material->surfaceMap ? material->surfaceMap->texture : nullptr
+						);
+						device->WriteDescriptor(
+							&descriptorTables[DESCRIPTORTABLE_SUBSETS_TEXTURES],
+							0,
+							global_geometryIndex * MATERIAL_TEXTURE_SLOT_DESCRIPTOR_COUNT + MATERIAL_TEXTURE_SLOT_DESCRIPTOR_OCCLUSION,
+							material->occlusionMap ? material->occlusionMap->texture : nullptr
+						);
+						device->WriteDescriptor(
+							&descriptorTables[DESCRIPTORTABLE_SUBSETS_TEXTURES],
+							0,
+							global_geometryIndex * MATERIAL_TEXTURE_SLOT_DESCRIPTOR_COUNT + MATERIAL_TEXTURE_SLOT_DESCRIPTOR_EMISSIVE,
+							material->emissiveMap ? material->emissiveMap->texture : nullptr
+						);
+						device->WriteDescriptor(
+							&descriptorTables[DESCRIPTORTABLE_SUBSETS_INDEXBUFFER],
+							0,
 							global_geometryIndex,
 							&mesh.indexBuffer,
 							subset.indexBuffer_subresource
 						);
 						device->WriteDescriptor(
-							&descriptorTable,
-							DESCRIPTORTABLE_ENTRY_SUBSETS_VERTEXBUFFER_POSITION_NORMAL_WIND,
-							global_geometryIndex,
+							&descriptorTables[DESCRIPTORTABLE_SUBSETS_VERTEXBUFFER_RAW],
+							0,
+							global_geometryIndex * VERTEXBUFFER_DESCRIPTOR_RAW_COUNT + VERTEXBUFFER_DESCRIPTOR_RAW_POS,
 							&mesh.vertexBuffer_POS
 						);
 						device->WriteDescriptor(
-							&descriptorTable,
-							DESCRIPTORTABLE_ENTRY_SUBSETS_VERTEXBUFFER_UV0,
-							global_geometryIndex,
+							&descriptorTables[DESCRIPTORTABLE_SUBSETS_VERTEXBUFFER_RAW],
+							0,
+							global_geometryIndex * VERTEXBUFFER_DESCRIPTOR_RAW_COUNT + VERTEXBUFFER_DESCRIPTOR_RAW_TAN,
+							&mesh.vertexBuffer_TAN
+						);
+						device->WriteDescriptor(
+							&descriptorTables[DESCRIPTORTABLE_SUBSETS_VERTEXBUFFER_RAW],
+							0,
+							global_geometryIndex * VERTEXBUFFER_DESCRIPTOR_RAW_COUNT + VERTEXBUFFER_DESCRIPTOR_RAW_COL,
+							&mesh.vertexBuffer_COL
+						);
+						device->WriteDescriptor(
+							&descriptorTables[DESCRIPTORTABLE_SUBSETS_VERTEXBUFFER_UVSETS],
+							0,
+							global_geometryIndex * VERTEXBUFFER_DESCRIPTOR_UV_COUNT + VERTEXBUFFER_DESCRIPTOR_UV_0,
 							&mesh.vertexBuffer_UV0
 						);
 						device->WriteDescriptor(
-							&descriptorTable,
-							DESCRIPTORTABLE_ENTRY_SUBSETS_VERTEXBUFFER_UV1,
-							global_geometryIndex,
+							&descriptorTables[DESCRIPTORTABLE_SUBSETS_VERTEXBUFFER_UVSETS],
+							0,
+							global_geometryIndex * VERTEXBUFFER_DESCRIPTOR_UV_COUNT + VERTEXBUFFER_DESCRIPTOR_UV_1,
 							&mesh.vertexBuffer_UV1
+						);
+						device->WriteDescriptor(
+							&descriptorTables[DESCRIPTORTABLE_SUBSETS_VERTEXBUFFER_UVSETS],
+							0,
+							global_geometryIndex * VERTEXBUFFER_DESCRIPTOR_UV_COUNT + VERTEXBUFFER_DESCRIPTOR_UV_ATL,
+							&mesh.vertexBuffer_ATL
 						);
 					}
 
@@ -2458,6 +2527,9 @@ namespace wiScene
 			    }
 
 			    mesh.aabb = AABB(_min, _max);
+
+				mesh.SetDirtyMorph(false);
+				wiRenderer::AddDeferredMorphUpdate(args.jobIndex);
 			}
 
 		});
@@ -2467,6 +2539,12 @@ namespace wiScene
 		wiJobSystem::Dispatch(ctx, (uint32_t)materials.GetCount(), small_subtask_groupsize, [&](wiJobArgs args) {
 
 			MaterialComponent& material = materials[args.jobIndex];
+			Entity entity = materials.GetEntity(args.jobIndex);
+			const LayerComponent* layer = layers.GetComponent(entity);
+			if (layer != nullptr)
+			{
+				material.layerMask = layer->layerMask;
+			}
 
 			if (!material.constantBuffer.IsValid())
 			{
@@ -2489,13 +2567,10 @@ namespace wiScene
 				material.engineStencilRef = STENCILREF_CUSTOMSHADER;
 			}
 
-			if (material.subsurfaceProfile == MaterialComponent::SUBSURFACE_SKIN)
+			if (material.IsDirty())
 			{
-				material.engineStencilRef = STENCILREF_SKIN;
-			}
-			else if (material.subsurfaceProfile == MaterialComponent::SUBSURFACE_SNOW)
-			{
-				material.engineStencilRef = STENCILREF_SNOW;
+				material.SetDirty(false);
+				wiRenderer::AddDeferredMaterialUpdate(args.jobIndex);
 			}
 
 		});
@@ -2760,7 +2835,7 @@ namespace wiScene
 			{
 			default:
 			case LightComponent::DIRECTIONAL:
-				aabb.createFromHalfWidth(wiRenderer::GetCamera().Eye, XMFLOAT3(10000, 10000, 10000));
+				aabb.createFromHalfWidth(XMFLOAT3(0, 0, 0), XMFLOAT3(FLT_MAX, FLT_MAX, FLT_MAX));
 				locker.lock();
 				if (args.jobIndex < weather.most_important_light_index)
 				{
@@ -2776,15 +2851,6 @@ namespace wiScene
 				break;
 			case LightComponent::POINT:
 				aabb.createFromHalfWidth(light.position, XMFLOAT3(light.GetRange(), light.GetRange(), light.GetRange()));
-				break;
-			case LightComponent::SPHERE:
-			case LightComponent::DISC:
-			case LightComponent::RECTANGLE:
-			case LightComponent::TUBE:
-				XMStoreFloat3(&light.right, XMVector3TransformNormal(XMVectorSet(-1, 0, 0, 0), W));
-				XMStoreFloat3(&light.front, XMVector3TransformNormal(XMVectorSet(0, 0, -1, 0), W));
-				// area lights have no bounds, just like directional lights (todo: but they should have real bounds)
-				aabb.createFromHalfWidth(wiRenderer::GetCamera().Eye, XMFLOAT3(10000, 10000, 10000));
 				break;
 			}
 
@@ -2829,7 +2895,7 @@ namespace wiScene
 	}
 	void Scene::RunSoundUpdateSystem(wiJobSystem::context& ctx)
 	{
-		const CameraComponent& camera = wiRenderer::GetCamera();
+		const CameraComponent& camera = GetCamera();
 		wiAudio::SoundInstance3D instance3D;
 		instance3D.listenerPos = camera.Eye;
 		instance3D.listenerUp = camera.Up;

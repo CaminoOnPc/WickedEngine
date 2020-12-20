@@ -14,7 +14,7 @@
 
 #include "Utility/D3D12MemAlloc.h"
 
-#include <dxgi1_4.h>
+#include <dxgi1_6.h>
 #include <d3d12.h>
 #include <wrl/client.h> // ComPtr
 
@@ -30,6 +30,8 @@ namespace wiGraphics
 	{
 	private:
 		Microsoft::WRL::ComPtr<ID3D12Device5> device;
+		Microsoft::WRL::ComPtr<IDXGIAdapter4> adapter;
+		Microsoft::WRL::ComPtr<IDXGIFactory6> factory;
 		Microsoft::WRL::ComPtr<ID3D12CommandQueue> directQueue;
 		Microsoft::WRL::ComPtr<ID3D12Fence> frameFence;
 		HANDLE frameFenceEvent;
@@ -67,16 +69,17 @@ namespace wiGraphics
 		D3D12_CPU_DESCRIPTOR_HANDLE rtv_descriptor_heap_start = {};
 		D3D12_CPU_DESCRIPTOR_HANDLE dsv_descriptor_heap_start = {};
 
+		Microsoft::WRL::ComPtr<ID3D12CommandQueue> copyQueue;
 		std::mutex copyQueueLock;
 		bool copyQueueUse = false;
 		Microsoft::WRL::ComPtr<ID3D12Fence> copyFence; // GPU only
+		UINT64 copyFenceValue = 0;
 
 		struct FrameResources
 		{
 			Microsoft::WRL::ComPtr<ID3D12CommandAllocator> commandAllocators[COMMANDLIST_COUNT];
 			Microsoft::WRL::ComPtr<ID3D12CommandList> commandLists[COMMANDLIST_COUNT];
 
-			Microsoft::WRL::ComPtr<ID3D12CommandQueue> copyQueue;
 			Microsoft::WRL::ComPtr<ID3D12CommandAllocator> copyAllocator;
 			Microsoft::WRL::ComPtr<ID3D12CommandList> copyCommandList;
 
@@ -154,7 +157,7 @@ namespace wiGraphics
 		const RootSignature* active_rootsig_compute[COMMANDLIST_COUNT] = {};
 		const RenderPass* active_renderpass[COMMANDLIST_COUNT] = {};
 		D3D12_RENDER_PASS_ENDING_ACCESS_RESOLVE_SUBRESOURCE_PARAMETERS resolve_subresources[COMMANDLIST_COUNT][D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
-		D3D12_SHADING_RATE prev_shadingrate[COMMANDLIST_COUNT] = {};
+		SHADING_RATE prev_shadingrate[COMMANDLIST_COUNT] = {};
 
 		bool dirty_pso[COMMANDLIST_COUNT] = {};
 		void pso_validate(CommandList cmd);
@@ -178,11 +181,7 @@ namespace wiGraphics
 
 		bool CreateBuffer(const GPUBufferDesc *pDesc, const SubresourceData* pInitialData, GPUBuffer *pBuffer) override;
 		bool CreateTexture(const TextureDesc* pDesc, const SubresourceData *pInitialData, Texture *pTexture) override;
-		bool CreateInputLayout(const InputLayoutDesc *pInputElementDescs, uint32_t NumElements, const Shader* shader, InputLayout *pInputLayout) override;
 		bool CreateShader(SHADERSTAGE stage, const void *pShaderBytecode, size_t BytecodeLength, Shader *pShader) override;
-		bool CreateBlendState(const BlendStateDesc *pBlendStateDesc, BlendState *pBlendState) override;
-		bool CreateDepthStencilState(const DepthStencilStateDesc *pDepthStencilStateDesc, DepthStencilState *pDepthStencilState) override;
-		bool CreateRasterizerState(const RasterizerStateDesc *pRasterizerStateDesc, RasterizerState *pRasterizerState) override;
 		bool CreateSampler(const SamplerDesc *pSamplerDesc, Sampler *pSamplerState) override;
 		bool CreateQuery(const GPUQueryDesc *pDesc, GPUQuery *pQuery) override;
 		bool CreatePipelineState(const PipelineStateDesc* pDesc, PipelineState* pso) override;
@@ -239,7 +238,6 @@ namespace wiGraphics
 		void BindStencilRef(uint32_t value, CommandList cmd) override;
 		void BindBlendFactor(float r, float g, float b, float a, CommandList cmd) override;
 		void BindShadingRate(SHADING_RATE rate, CommandList cmd) override;
-		void BindShadingRateImage(const Texture* texture, CommandList cmd) override;
 		void BindPipelineState(const PipelineState* pso, CommandList cmd) override;
 		void BindComputeShader(const Shader* cs, CommandList cmd) override;
 		void Draw(uint32_t vertexCount, uint32_t startVertexLocation, CommandList cmd) override;

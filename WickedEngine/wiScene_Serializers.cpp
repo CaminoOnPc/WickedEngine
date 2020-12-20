@@ -104,12 +104,7 @@ namespace wiScene
 			archive >> refractionIndex;
 			if (archive.GetVersion() < 52)
 			{
-				float subsurfaceScattering;
-				archive >> subsurfaceScattering;
-				if (subsurfaceScattering > 0)
-				{
-					subsurfaceProfile = SUBSURFACE_SKIN;
-				}
+				archive >> subsurfaceScattering.w;
 			}
 			archive >> normalMapStrength;
 			archive >> parallaxOcclusionMapping;
@@ -168,12 +163,21 @@ namespace wiScene
 				}
 			}
 
-			if (archive.GetVersion() >= 52)
+			if (archive.GetVersion() >= 52 && archive.GetVersion() < 54)
 			{
-				archive >> (uint32_t&)subsurfaceProfile;
+				uint32_t subsurfaceProfile;
+				archive >> subsurfaceProfile;
 			}
 
-			SetDirty();
+			if (archive.GetVersion() >= 54)
+			{
+				archive >> subsurfaceScattering;
+			}
+
+			if (archive.GetVersion() >= 56)
+			{
+				archive >> specularColor;
+			}
 
 			wiJobSystem::Execute(seri.ctx, [&](wiJobArgs args) {
 				CreateRenderData(dir);
@@ -280,9 +284,14 @@ namespace wiScene
 				archive << customShaderID;
 			}
 
-			if (archive.GetVersion() >= 52)
+			if (archive.GetVersion() >= 54)
 			{
-				archive << (uint32_t&)subsurfaceProfile;
+				archive << subsurfaceScattering;
+			}
+
+			if (archive.GetVersion() >= 56)
+			{
+				archive << specularColor;
 			}
 		}
 	}
@@ -574,29 +583,26 @@ namespace wiScene
 			archive >> _flags;
 			archive >> color;
 			archive >> (uint32_t&)type;
+			if (type > SPOT)
+			{
+				type = POINT; // fallback from old area light
+			}
 			archive >> energy;
 			archive >> range_local;
 			archive >> fov;
-			archive >> shadowBias;
-			archive >> radius;
-			archive >> width;
-			archive >> height;
+			if (archive.GetVersion() < 55)
+			{
+				float shadowBias;
+				float radius;
+				float width;
+				float height;
+				archive >> shadowBias;
+				archive >> radius;
+				archive >> width;
+				archive >> height;
+			}
 
 			archive >> lensFlareNames;
-
-			if (archive.GetVersion() < 33)
-			{
-				switch (GetType())
-				{
-				case LightComponent::POINT:
-				case LightComponent::SPHERE:
-				case LightComponent::DISC:
-				case LightComponent::RECTANGLE:
-				case LightComponent::TUBE:
-					shadowBias = 0.0001f;
-					break;
-				}
-			}
 
 			wiJobSystem::Execute(seri.ctx, [&](wiJobArgs args) {
 				lensFlareRimTextures.resize(lensFlareNames.size());
@@ -617,10 +623,17 @@ namespace wiScene
 			archive << energy;
 			archive << range_local;
 			archive << fov;
-			archive << shadowBias;
-			archive << radius;
-			archive << width;
-			archive << height;
+			if (archive.GetVersion() < 55)
+			{
+				float shadowBias = 0;
+				float radius = 0;
+				float width = 0;
+				float height = 0;
+				archive << shadowBias;
+				archive << radius;
+				archive << width;
+				archive << height;
+			}
 
 			// If detecting an absolute path in textures, remove it and convert to relative:
 			if (!dir.empty())

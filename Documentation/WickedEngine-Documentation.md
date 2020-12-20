@@ -182,13 +182,17 @@ Calls Compose for the active RenderPath
 [[Header]](../WickedEngine/RenderPath.h)
 This is an empty base class that can be activated with a MainComponent. It calls its Start(), Update(), FixedUpdate(), Render(), Compose(), Stop() functions as needed. Override this to perform custom gameplay or rendering logic. <br/>
 The order in which the functions are executed every frame: <br/>
-1. FixedUpdate() <br/>
+1. PreUpdate() <br/>
+This will be called once per frame before any script that calls Update().
+2. FixedUpdate() <br/>
 This will be called in a manner that is deterministic, so logic will be running in the frequency that is specified with MainComponent::setTargetFrameRate(float framespersecond)
-2. Update(float deltatime) <br/>
+3. Update(float deltatime) <br/>
 This will be called once per frame, and the elapsed time in seconds since the last Update() is provided as parameter
-3. Render() const <br/>
+4. PostUpdate() <br/>
+This will be called once per frame after any script that calls Update().
+5. Render() const <br/>
 This will be called once per frame. It is const, so it shouldn't modify state. When running this, it is not defined which thread it is running on. Multiple threads and job system can be used within this. The main purpose is to record mass rendering commands in multiple threads and command lists. Command list can be safely retrieved at this point from the graphics device. 
-4. Compose(CommandList cmd) const <br/>
+6. Compose(CommandList cmd) const <br/>
 It is called once per frame. It is running on a single command list that it receives as a parameter. These rendering commands will directly record onto the last submitted command list in the frame. The render target is the back buffer at this point, so rendering will happen to the screen.
 
 Apart from the functions that will be run every frame, the RenderPath has the following functions:
@@ -645,7 +649,7 @@ Binding a ray tracing pipeline state is required to dispatch ray tracing shaders
 Variable Rate Shading can be used to decrease shading quality while retaining depth testing accuracy. The shading rate can be set up in different ways:
 
 - `BindShadingRate()`: Set the shading rate for the following draw calls. The first parameter is the shading rate, which is by default `SHADING_RATE_1X1` (the best quality). The increasing enum values are standing for decreasing shading rates.
-- `BindShadingRateImage()`: Set the shading rate for the screen via a tiled texture. The texture must be using the `FORMAT_R8_UINT` format. In each pixel, the texture contains the shading rate value for a tile of pixels (8x8, 16x16 or 32x32). The tile size can be queried via `GetVariableRateShadingTileSize()`. The shading rate values that the texture contains are not the raw values from `SHADING_RATE` enum, but they must be converted to values that are native to the graphics API used using the `WriteShadingRateValue()` function. The shading rate texture must be written with a compute shader and transitioned to `IMAGE_LAYOUT_SHADING_RATE_SOURCE` with a [GPUBarrier](#gpu-barriers) before setting it with `BindShadingRateImage()`. It is valid to set a `nullptr` instead of the texture, indicating that the shading rate is not specified by a texture.
+- Shading rate image: Set the shading rate for the screen via a tiled texture. The texture must be set as a RenderPassAttachment of `SHADING_RATE_SOURCE` type. The texture must be using the `FORMAT_R8_UINT` format. In each pixel, the texture contains the shading rate value for a tile of pixels (8x8, 16x16 or 32x32). The tile size can be queried via `GetVariableRateShadingTileSize()`. The shading rate values that the texture contains are not the raw values from `SHADING_RATE` enum, but they must be converted to values that are native to the graphics API used using the `WriteShadingRateValue()` function. The shading rate texture must be written with a compute shader and transitioned to `IMAGE_LAYOUT_SHADING_RATE_SOURCE` with a [GPUBarrier](#gpu-barriers) before setting it with `BindShadingRateImage()`. It is valid to set a `nullptr` instead of the texture, indicating that the shading rate is not specified by a texture.
 - Or setting the shading rate from a vertex or geometry shader with the `SV_ShadingRate` system value semantic.
 
 The final shading rate will be determined from the above methods using the maximum shading rate (least detailed) which is applicable to the screen tile. In the future it might be considered to expose the operator to define this.

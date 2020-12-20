@@ -1,4 +1,4 @@
-﻿#include "stdafx.h"
+#include "stdafx.h"
 #include "Editor.h"
 #include "wiRenderer.h"
 
@@ -119,6 +119,8 @@ void EditorComponent::ChangeRenderPath(RENDERPATH path)
 		break;
 	}
 
+	renderPath->resolutionScale = resolutionScale;
+
 	renderPath->setShadowsEnabled(true);
 	renderPath->setReflectionsEnabled(true);
 	renderPath->setAO(RenderPath3D::AO_DISABLED);
@@ -159,8 +161,8 @@ void EditorComponent::ResizeBuffers()
 	if(renderPath != nullptr && renderPath->GetDepthStencil() != nullptr)
 	{
 		TextureDesc desc;
-		desc.Width = wiRenderer::GetInternalResolution().x;
-		desc.Height = wiRenderer::GetInternalResolution().y;
+		desc.Width = GetInternalResolution().x;
+		desc.Height = GetInternalResolution().y;
 
 		desc.Format = FORMAT_R8_UNORM;
 		desc.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE;
@@ -791,7 +793,7 @@ void EditorComponent::Load()
 	clearButton.SetColor(wiColor(255, 235, 173, 255), wiWidget::WIDGETSTATE::FOCUS);
 	clearButton.OnClick([&](wiEventArgs args) {
 		translator.selected.clear();
-		wiRenderer::ClearWorld();
+		wiRenderer::ClearWorld(wiScene::GetScene());
 		objectWnd.SetEntity(INVALID_ENTITY);
 		meshWnd.SetEntity(INVALID_ENTITY);
 		lightWnd.SetEntity(INVALID_ENTITY);
@@ -986,19 +988,24 @@ void EditorComponent::Start()
 {
 	RenderPath2D::Start();
 }
+void EditorComponent::PreUpdate()
+{
+	RenderPath2D::PreUpdate();
+
+	renderPath->PreUpdate();
+}
 void EditorComponent::FixedUpdate()
 {
 	RenderPath2D::FixedUpdate();
 
 	renderPath->FixedUpdate();
 }
-
 void EditorComponent::Update(float dt)
 {
 	wiProfiler::range_id profrange = wiProfiler::BeginRangeCPU("Editor Update");
 
 	Scene& scene = wiScene::GetScene();
-	CameraComponent& camera = wiRenderer::GetCamera();
+	CameraComponent& camera = wiScene::GetCamera();
 
 	animWnd.Update();
 	weatherWnd.Update();
@@ -1006,152 +1013,162 @@ void EditorComponent::Update(float dt)
 
 	selectionOutlineTimer += dt;
 
-	// Exit cinema mode:
-	if (wiInput::Down(wiInput::KEYBOARD_BUTTON_ESCAPE))
+	if (wiInput::Press(wiInput::KEYBOARD_BUTTON_ESCAPE))
 	{
-		if (renderPath != nullptr)
+		if (cinemaModeCheckBox.GetCheck())
 		{
-			renderPath->GetGUI().SetVisible(true);
-		}
-		GetGUI().SetVisible(true);
-		main->infoDisplay.active = true;
+			// Exit cinema mode:
+			if (renderPath != nullptr)
+			{
+				renderPath->GetGUI().SetVisible(true);
+			}
+			GetGUI().SetVisible(true);
+			main->infoDisplay.active = true;
 
-		cinemaModeCheckBox.SetCheck(false);
+			cinemaModeCheckBox.SetCheck(false);
+		}
+		else
+		{
+			ClearSelected();
+		}
 	}
 
 	// Camera control:
-	static XMFLOAT4 originalMouse = XMFLOAT4(0, 0, 0, 0);
-	static bool camControlStart = true;
-	if (camControlStart)
-	{
-		originalMouse = wiInput::GetPointer();
-	}
-
 	XMFLOAT4 currentMouse = wiInput::GetPointer();
-	float xDif = 0, yDif = 0;
-
-	if (wiInput::Down(wiInput::MOUSE_BUTTON_MIDDLE))
+	if (!wiBackLog::isActive())
 	{
-		camControlStart = false;
+		static XMFLOAT4 originalMouse = XMFLOAT4(0, 0, 0, 0);
+		static bool camControlStart = true;
+		if (camControlStart)
+		{
+			originalMouse = wiInput::GetPointer();
+		}
+
+		float xDif = 0, yDif = 0;
+
+		if (wiInput::Down(wiInput::MOUSE_BUTTON_MIDDLE))
+		{
+			camControlStart = false;
 #if 0
-		// Mouse delta from previous frame:
-		xDif = currentMouse.x - originalMouse.x;
-		yDif = currentMouse.y - originalMouse.y;
+			// Mouse delta from previous frame:
+			xDif = currentMouse.x - originalMouse.x;
+			yDif = currentMouse.y - originalMouse.y;
 #else
-		// Mouse delta from hardware read:
-		xDif = wiInput::GetMouseState().delta_position.x;
-		yDif = wiInput::GetMouseState().delta_position.y;
+			// Mouse delta from hardware read:
+			xDif = wiInput::GetMouseState().delta_position.x;
+			yDif = wiInput::GetMouseState().delta_position.y;
 #endif
-		xDif = 0.1f * xDif * (1.0f / 60.0f);
-		yDif = 0.1f * yDif * (1.0f / 60.0f);
-		wiInput::SetPointer(originalMouse);
-		wiInput::HidePointer(true);
+			xDif = 0.1f * xDif * (1.0f / 60.0f);
+			yDif = 0.1f * yDif * (1.0f / 60.0f);
+			wiInput::SetPointer(originalMouse);
+			wiInput::HidePointer(true);
 	}
-	else
-	{
-		camControlStart = true;
-		wiInput::HidePointer(false);
-	}
-
-	const float buttonrotSpeed = 2.0f / 60.0f;
-	if (wiInput::Down(wiInput::KEYBOARD_BUTTON_LEFT))
-	{
-		xDif -= buttonrotSpeed;
-	}
-	if (wiInput::Down(wiInput::KEYBOARD_BUTTON_RIGHT))
-	{
-		xDif += buttonrotSpeed;
-	}
-	if (wiInput::Down(wiInput::KEYBOARD_BUTTON_UP))
-	{
-		yDif -= buttonrotSpeed;
-	}
-	if (wiInput::Down(wiInput::KEYBOARD_BUTTON_DOWN))
-	{
-		yDif += buttonrotSpeed;
-	}
-
-	const XMFLOAT4 leftStick = wiInput::GetAnalog(wiInput::GAMEPAD_ANALOG_THUMBSTICK_L, 0);
-	const XMFLOAT4 rightStick = wiInput::GetAnalog(wiInput::GAMEPAD_ANALOG_THUMBSTICK_R, 0);
-	const XMFLOAT4 rightTrigger = wiInput::GetAnalog(wiInput::GAMEPAD_ANALOG_TRIGGER_R, 0);
-
-	const float jostickrotspeed = 0.05f;
-	xDif += rightStick.x * jostickrotspeed;
-	yDif += rightStick.y * jostickrotspeed;
-
-	xDif *= cameraWnd.rotationspeedSlider.GetValue();
-	yDif *= cameraWnd.rotationspeedSlider.GetValue();
-
-
-	if (cameraWnd.fpsCheckBox.GetCheck())
-	{
-		// FPS Camera
-		const float clampedDT = min(dt, 0.1f); // if dt > 100 millisec, don't allow the camera to jump too far...
-
-		const float speed = ((wiInput::Down(wiInput::KEYBOARD_BUTTON_LSHIFT) ? 10.0f : 1.0f) + rightTrigger.x * 10.0f) * cameraWnd.movespeedSlider.GetValue() * clampedDT;
-		static XMVECTOR move = XMVectorSet(0, 0, 0, 0);
-		XMVECTOR moveNew = XMVectorSet(leftStick.x, 0, leftStick.y, 0);
-
-		if (!wiInput::Down(wiInput::KEYBOARD_BUTTON_LCONTROL))
+		else
 		{
-			// Only move camera if control not pressed
-			if (wiInput::Down((wiInput::BUTTON)'A') || wiInput::Down(wiInput::GAMEPAD_BUTTON_LEFT)) { moveNew += XMVectorSet(-1, 0, 0, 0); }
-			if (wiInput::Down((wiInput::BUTTON)'D') || wiInput::Down(wiInput::GAMEPAD_BUTTON_RIGHT)) { moveNew += XMVectorSet(1, 0, 0, 0); }
-			if (wiInput::Down((wiInput::BUTTON)'W') || wiInput::Down(wiInput::GAMEPAD_BUTTON_UP)) { moveNew += XMVectorSet(0, 0, 1, 0); }
-			if (wiInput::Down((wiInput::BUTTON)'S') || wiInput::Down(wiInput::GAMEPAD_BUTTON_DOWN)) { moveNew += XMVectorSet(0, 0, -1, 0); }
-			if (wiInput::Down((wiInput::BUTTON)'E') || wiInput::Down(wiInput::GAMEPAD_BUTTON_2)) { moveNew += XMVectorSet(0, 1, 0, 0); }
-			if (wiInput::Down((wiInput::BUTTON)'Q') || wiInput::Down(wiInput::GAMEPAD_BUTTON_1)) { moveNew += XMVectorSet(0, -1, 0, 0); }
-			moveNew += XMVector3Normalize(moveNew);
-		}
-		moveNew *= speed;
-
-		move = XMVectorLerp(move, moveNew, 0.18f * clampedDT / 0.0166f); // smooth the movement a bit
-		float moveLength = XMVectorGetX(XMVector3Length(move));
-
-		if (moveLength < 0.0001f)
-		{
-			move = XMVectorSet(0, 0, 0, 0);
+			camControlStart = true;
+			wiInput::HidePointer(false);
 		}
 
-		if (abs(xDif) + abs(yDif) > 0 || moveLength > 0.0001f)
+		const float buttonrotSpeed = 2.0f / 60.0f;
+		if (wiInput::Down(wiInput::KEYBOARD_BUTTON_LEFT))
 		{
-			XMMATRIX camRot = XMMatrixRotationQuaternion(XMLoadFloat4(&cameraWnd.camera_transform.rotation_local));
-			XMVECTOR move_rot = XMVector3TransformNormal(move, camRot);
-			XMFLOAT3 _move;
-			XMStoreFloat3(&_move, move_rot);
-			cameraWnd.camera_transform.Translate(_move);
-			cameraWnd.camera_transform.RotateRollPitchYaw(XMFLOAT3(yDif, xDif, 0));
-			camera.SetDirty();
+			xDif -= buttonrotSpeed;
+		}
+		if (wiInput::Down(wiInput::KEYBOARD_BUTTON_RIGHT))
+		{
+			xDif += buttonrotSpeed;
+		}
+		if (wiInput::Down(wiInput::KEYBOARD_BUTTON_UP))
+		{
+			yDif -= buttonrotSpeed;
+		}
+		if (wiInput::Down(wiInput::KEYBOARD_BUTTON_DOWN))
+		{
+			yDif += buttonrotSpeed;
 		}
 
-		cameraWnd.camera_transform.UpdateTransform();
-	}
-	else
-	{
-		// Orbital Camera
+		const XMFLOAT4 leftStick = wiInput::GetAnalog(wiInput::GAMEPAD_ANALOG_THUMBSTICK_L, 0);
+		const XMFLOAT4 rightStick = wiInput::GetAnalog(wiInput::GAMEPAD_ANALOG_THUMBSTICK_R, 0);
+		const XMFLOAT4 rightTrigger = wiInput::GetAnalog(wiInput::GAMEPAD_ANALOG_TRIGGER_R, 0);
 
-		if (wiInput::Down(wiInput::KEYBOARD_BUTTON_LSHIFT))
-		{
-			XMVECTOR V = XMVectorAdd(camera.GetRight() * xDif, camera.GetUp() * yDif) * 10;
-			XMFLOAT3 vec;
-			XMStoreFloat3(&vec, V);
-			cameraWnd.camera_target.Translate(vec);
-		}
-		else if (wiInput::Down(wiInput::KEYBOARD_BUTTON_LCONTROL) || currentMouse.z != 0.0f)
-		{
-			cameraWnd.camera_transform.Translate(XMFLOAT3(0, 0, yDif * 4 + currentMouse.z));
-			cameraWnd.camera_transform.translation_local.z = std::min(0.0f, cameraWnd.camera_transform.translation_local.z);
-			camera.SetDirty();
-		}
-		else if (abs(xDif) + abs(yDif) > 0)
-		{
-			cameraWnd.camera_target.RotateRollPitchYaw(XMFLOAT3(yDif * 2, xDif * 2, 0));
-			camera.SetDirty();
-		}
+		const float jostickrotspeed = 0.05f;
+		xDif += rightStick.x * jostickrotspeed;
+		yDif += rightStick.y * jostickrotspeed;
 
-		cameraWnd.camera_target.UpdateTransform();
-		cameraWnd.camera_transform.UpdateTransform_Parented(cameraWnd.camera_target);
-	}
+		xDif *= cameraWnd.rotationspeedSlider.GetValue();
+		yDif *= cameraWnd.rotationspeedSlider.GetValue();
+
+
+		if (cameraWnd.fpsCheckBox.GetCheck())
+		{
+			// FPS Camera
+			const float clampedDT = min(dt, 0.1f); // if dt > 100 millisec, don't allow the camera to jump too far...
+
+			const float speed = ((wiInput::Down(wiInput::KEYBOARD_BUTTON_LSHIFT) ? 10.0f : 1.0f) + rightTrigger.x * 10.0f) * cameraWnd.movespeedSlider.GetValue() * clampedDT;
+			static XMVECTOR move = XMVectorSet(0, 0, 0, 0);
+			XMVECTOR moveNew = XMVectorSet(leftStick.x, 0, leftStick.y, 0);
+
+			if (!wiInput::Down(wiInput::KEYBOARD_BUTTON_LCONTROL))
+			{
+				// Only move camera if control not pressed
+				if (wiInput::Down((wiInput::BUTTON)'A') || wiInput::Down(wiInput::GAMEPAD_BUTTON_LEFT)) { moveNew += XMVectorSet(-1, 0, 0, 0); }
+				if (wiInput::Down((wiInput::BUTTON)'D') || wiInput::Down(wiInput::GAMEPAD_BUTTON_RIGHT)) { moveNew += XMVectorSet(1, 0, 0, 0); }
+				if (wiInput::Down((wiInput::BUTTON)'W') || wiInput::Down(wiInput::GAMEPAD_BUTTON_UP)) { moveNew += XMVectorSet(0, 0, 1, 0); }
+				if (wiInput::Down((wiInput::BUTTON)'S') || wiInput::Down(wiInput::GAMEPAD_BUTTON_DOWN)) { moveNew += XMVectorSet(0, 0, -1, 0); }
+				if (wiInput::Down((wiInput::BUTTON)'E') || wiInput::Down(wiInput::GAMEPAD_BUTTON_2)) { moveNew += XMVectorSet(0, 1, 0, 0); }
+				if (wiInput::Down((wiInput::BUTTON)'Q') || wiInput::Down(wiInput::GAMEPAD_BUTTON_1)) { moveNew += XMVectorSet(0, -1, 0, 0); }
+				moveNew += XMVector3Normalize(moveNew);
+			}
+			moveNew *= speed;
+
+			move = XMVectorLerp(move, moveNew, 0.18f * clampedDT / 0.0166f); // smooth the movement a bit
+			float moveLength = XMVectorGetX(XMVector3Length(move));
+
+			if (moveLength < 0.0001f)
+			{
+				move = XMVectorSet(0, 0, 0, 0);
+			}
+
+			if (abs(xDif) + abs(yDif) > 0 || moveLength > 0.0001f)
+			{
+				XMMATRIX camRot = XMMatrixRotationQuaternion(XMLoadFloat4(&cameraWnd.camera_transform.rotation_local));
+				XMVECTOR move_rot = XMVector3TransformNormal(move, camRot);
+				XMFLOAT3 _move;
+				XMStoreFloat3(&_move, move_rot);
+				cameraWnd.camera_transform.Translate(_move);
+				cameraWnd.camera_transform.RotateRollPitchYaw(XMFLOAT3(yDif, xDif, 0));
+				camera.SetDirty();
+			}
+
+			cameraWnd.camera_transform.UpdateTransform();
+		}
+		else
+		{
+			// Orbital Camera
+
+			if (wiInput::Down(wiInput::KEYBOARD_BUTTON_LSHIFT))
+			{
+				XMVECTOR V = XMVectorAdd(camera.GetRight() * xDif, camera.GetUp() * yDif) * 10;
+				XMFLOAT3 vec;
+				XMStoreFloat3(&vec, V);
+				cameraWnd.camera_target.Translate(vec);
+			}
+			else if (wiInput::Down(wiInput::KEYBOARD_BUTTON_LCONTROL) || currentMouse.z != 0.0f)
+			{
+				cameraWnd.camera_transform.Translate(XMFLOAT3(0, 0, yDif * 4 + currentMouse.z));
+				cameraWnd.camera_transform.translation_local.z = std::min(0.0f, cameraWnd.camera_transform.translation_local.z);
+				camera.SetDirty();
+			}
+			else if (abs(xDif) + abs(yDif) > 0)
+			{
+				cameraWnd.camera_target.RotateRollPitchYaw(XMFLOAT3(yDif * 2, xDif * 2, 0));
+				camera.SetDirty();
+			}
+
+			cameraWnd.camera_target.UpdateTransform();
+			cameraWnd.camera_transform.UpdateTransform_Parented(cameraWnd.camera_target);
+		}
+}
 
 	if (!wiBackLog::isActive() && !GetGUI().HasFocus())
 	{
@@ -1689,6 +1706,12 @@ void EditorComponent::Update(float dt)
 
 	renderPath->Update(dt);
 }
+void EditorComponent::PostUpdate()
+{
+	RenderPath2D::PostUpdate();
+
+	renderPath->PostUpdate();
+}
 void EditorComponent::Render() const
 {
 	Scene& scene = wiScene::GetScene();
@@ -1893,7 +1916,7 @@ void EditorComponent::Compose(CommandList cmd) const
 		device->EventEnd(cmd);
 	}
 
-	const CameraComponent& camera = wiRenderer::GetCamera();
+	const CameraComponent& camera = wiScene::GetCamera();
 
 	Scene& scene = wiScene::GetScene();
 
@@ -1901,6 +1924,18 @@ void EditorComponent::Compose(CommandList cmd) const
 	const wiColor hoveredEntityColor = wiColor::fromFloat4(XMFLOAT4(1, 1, 1, 1));
 	const XMFLOAT4 glow = wiMath::Lerp(wiMath::Lerp(XMFLOAT4(1, 1, 1, 1), selectionColor, 0.4f), selectionColor, selectionColorIntensity);
 	const wiColor selectedEntityColor = wiColor::fromFloat4(glow);
+
+	// remove camera jittering
+	CameraComponent cam = *renderPath->camera;
+	cam.jitter = XMFLOAT2(0, 0);
+	cam.UpdateCamera();
+	const XMMATRIX VP = cam.GetViewProjection();
+
+	const XMMATRIX R = XMLoadFloat3x3(&cam.rotationMatrix);
+
+	wiImageParams fx;
+	fx.customRotation = &R;
+	fx.customProjection = &VP;
 
 	if (rendererWnd.GetPickType() & PICK_LIGHT)
 	{
@@ -1912,10 +1947,8 @@ void EditorComponent::Compose(CommandList cmd) const
 
 			float dist = wiMath::Distance(transform.GetPosition(), camera.Eye) * 0.08f;
 
-			wiImageParams fx;
 			fx.pos = transform.GetPosition();
 			fx.siz = XMFLOAT2(dist, dist);
-			fx.typeFlag = ImageType::WORLD;
 			fx.pivot = XMFLOAT2(0.5f, 0.5f);
 			fx.color = inactiveEntityColor;
 
@@ -1960,10 +1993,8 @@ void EditorComponent::Compose(CommandList cmd) const
 
 			float dist = wiMath::Distance(transform.GetPosition(), camera.Eye) * 0.08f;
 
-			wiImageParams fx;
 			fx.pos = transform.GetPosition();
 			fx.siz = XMFLOAT2(dist, dist);
-			fx.typeFlag = ImageType::WORLD;
 			fx.pivot = XMFLOAT2(0.5f, 0.5f);
 			fx.color = inactiveEntityColor;
 
@@ -1995,10 +2026,8 @@ void EditorComponent::Compose(CommandList cmd) const
 
 			float dist = wiMath::Distance(transform.GetPosition(), camera.Eye) * 0.08f;
 
-			wiImageParams fx;
 			fx.pos = transform.GetPosition();
 			fx.siz = XMFLOAT2(dist, dist);
-			fx.typeFlag = ImageType::WORLD;
 			fx.pivot = XMFLOAT2(0.5f, 0.5f);
 			fx.color = inactiveEntityColor;
 
@@ -2030,10 +2059,8 @@ void EditorComponent::Compose(CommandList cmd) const
 
 			float dist = wiMath::Distance(transform.GetPosition(), camera.Eye) * 0.08f;
 
-			wiImageParams fx;
 			fx.pos = transform.GetPosition();
 			fx.siz = XMFLOAT2(dist, dist);
-			fx.typeFlag = ImageType::WORLD;
 			fx.pivot = XMFLOAT2(0.5f, 0.5f);
 			fx.color = inactiveEntityColor;
 
@@ -2064,10 +2091,8 @@ void EditorComponent::Compose(CommandList cmd) const
 
 			float dist = wiMath::Distance(transform.GetPosition(), camera.Eye) * 0.08f;
 
-			wiImageParams fx;
 			fx.pos = transform.GetPosition();
 			fx.siz = XMFLOAT2(dist, dist);
-			fx.typeFlag = ImageType::WORLD;
 			fx.pivot = XMFLOAT2(0.5f, 0.5f);
 			fx.color = inactiveEntityColor;
 
@@ -2098,10 +2123,8 @@ void EditorComponent::Compose(CommandList cmd) const
 
 			float dist = wiMath::Distance(transform.GetPosition(), camera.Eye) * 0.08f;
 
-			wiImageParams fx;
 			fx.pos = transform.GetPosition();
 			fx.siz = XMFLOAT2(dist, dist);
-			fx.typeFlag = ImageType::WORLD;
 			fx.pivot = XMFLOAT2(0.5f, 0.5f);
 			fx.color = inactiveEntityColor;
 
@@ -2132,10 +2155,8 @@ void EditorComponent::Compose(CommandList cmd) const
 
 			float dist = wiMath::Distance(transform.GetPosition(), camera.Eye) * 0.08f;
 
-			wiImageParams fx;
 			fx.pos = transform.GetPosition();
 			fx.siz = XMFLOAT2(dist, dist);
-			fx.typeFlag = ImageType::WORLD;
 			fx.pivot = XMFLOAT2(0.5f, 0.5f);
 			fx.color = inactiveEntityColor;
 
@@ -2166,10 +2187,8 @@ void EditorComponent::Compose(CommandList cmd) const
 
 			float dist = wiMath::Distance(transform.GetPosition(), camera.Eye) * 0.08f;
 
-			wiImageParams fx;
 			fx.pos = transform.GetPosition();
 			fx.siz = XMFLOAT2(dist, dist);
-			fx.typeFlag = ImageType::WORLD;
 			fx.pivot = XMFLOAT2(0.5f, 0.5f);
 			fx.color = inactiveEntityColor;
 

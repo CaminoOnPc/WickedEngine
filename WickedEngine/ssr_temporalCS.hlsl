@@ -9,7 +9,7 @@ RWTEXTURE2D(output, float4, 0);
 
 static const float temporalResponseMin = 0.85;
 static const float temporalResponseMax = 0.98f;
-static const float temporalScale = 2.0;
+static const float temporalScale = 3.0;
 static const float temporalExposure = 10.0f;
 
 inline float Luma4(float3 color)
@@ -96,7 +96,7 @@ float2 CalculateCustomMotion(float depth, float2 uv)
     float4 sampleWorldPosition = float4(reconstructPosition(uv, depth, g_xCamera_InvVP), 1.0f);
     
     float4 thisClip = mul(g_xCamera_VP, sampleWorldPosition);
-    float4 prevClip = mul(g_xFrame_MainCamera_PrevVP, sampleWorldPosition);
+    float4 prevClip = mul(g_xCamera_PrevVP, sampleWorldPosition);
     
     float2 thisScreen = thisClip.xy * rcp(thisClip.w);
     float2 prevScreen = prevClip.xy * rcp(prevClip.w);

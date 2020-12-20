@@ -8,7 +8,9 @@ PixelInputType main(Input_Object_ALL input)
 
 	float4x4 WORLD = MakeWorldMatrixFromInstance(input.inst);
 	float4x4 WORLDPREV = MakeWorldMatrixFromInstance(input.instPrev);
-	VertexSurface surface = MakeVertexSurfaceFromInput(input);
+
+	VertexSurface surface;
+	surface.create(g_xMaterial, input);
 
 	surface.position = mul(WORLD, surface.position);
 	surface.prevPos = mul(WORLDPREV, surface.prevPos);
@@ -18,7 +20,7 @@ PixelInputType main(Input_Object_ALL input)
 	Out.clip = dot(surface.position, g_xCamera_ClipPlane);
 
 	Out.pos = mul(g_xCamera_VP, surface.position);
-	Out.pos2DPrev = mul(g_xFrame_MainCamera_PrevVP, surface.prevPos);
+	Out.pos2DPrev = mul(g_xCamera_PrevVP, surface.prevPos);
 	Out.pos3D = surface.position.xyz;
 	Out.color = surface.color;
 	Out.uvsets = surface.uvsets;

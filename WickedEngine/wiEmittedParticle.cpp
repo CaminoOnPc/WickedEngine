@@ -545,6 +545,7 @@ void wiEmittedParticle::Draw(const CameraComponent& camera, const MaterialCompon
 
 	device->BindConstantBuffer(VS, &constantBuffer, CB_GETBINDSLOT(EmittedParticleCB), cmd);
 	device->BindConstantBuffer(PS, &constantBuffer, CB_GETBINDSLOT(EmittedParticleCB), cmd);
+	device->BindConstantBuffer(PS, &material.constantBuffer, CB_GETBINDSLOT(MaterialCB), cmd);
 
 	if (device->CheckCapability(GRAPHICSDEVICE_CAPABILITY_MESH_SHADER))
 	{
@@ -653,7 +654,7 @@ namespace wiEmittedParticle_Internal
 void wiEmittedParticle::Initialize()
 {
 
-	RasterizerStateDesc rs;
+	RasterizerState rs;
 	rs.FillMode = FILL_SOLID;
 	rs.CullMode = CULL_NONE;
 	rs.FrontCounterClockwise = true;
@@ -663,7 +664,7 @@ void wiEmittedParticle::Initialize()
 	rs.DepthClipEnable = false;
 	rs.MultisampleEnable = false;
 	rs.AntialiasedLineEnable = false;
-	wiRenderer::GetDevice()->CreateRasterizerState(&rs, &rasterizerState);
+	rasterizerState = rs;
 
 
 	rs.FillMode = FILL_WIREFRAME;
@@ -675,18 +676,18 @@ void wiEmittedParticle::Initialize()
 	rs.DepthClipEnable = false;
 	rs.MultisampleEnable = false;
 	rs.AntialiasedLineEnable = false;
-	wiRenderer::GetDevice()->CreateRasterizerState(&rs, &wireFrameRS);
+	wireFrameRS = rs;
 
 
-	DepthStencilStateDesc dsd;
+	DepthStencilState dsd;
 	dsd.DepthEnable = true;
 	dsd.DepthWriteMask = DEPTH_WRITE_MASK_ZERO;
 	dsd.DepthFunc = COMPARISON_GREATER_EQUAL;
 	dsd.StencilEnable = false;
-	wiRenderer::GetDevice()->CreateDepthStencilState(&dsd, &depthStencilState);
+	depthStencilState = dsd;
 
 
-	BlendStateDesc bd;
+	BlendState bd;
 	bd.RenderTarget[0].BlendEnable = true;
 	bd.RenderTarget[0].SrcBlend = BLEND_SRC_ALPHA;
 	bd.RenderTarget[0].DestBlend = BLEND_INV_SRC_ALPHA;
@@ -696,7 +697,7 @@ void wiEmittedParticle::Initialize()
 	bd.RenderTarget[0].BlendOpAlpha = BLEND_OP_ADD;
 	bd.RenderTarget[0].RenderTargetWriteMask = COLOR_WRITE_ENABLE_ALL;
 	bd.IndependentBlendEnable = false;
-	wiRenderer::GetDevice()->CreateBlendState(&bd, &blendStates[BLENDMODE_ALPHA]);
+	blendStates[BLENDMODE_ALPHA] = bd;
 
 	bd.RenderTarget[0].BlendEnable = true;
 	bd.RenderTarget[0].SrcBlend = BLEND_SRC_ALPHA;
@@ -707,7 +708,7 @@ void wiEmittedParticle::Initialize()
 	bd.RenderTarget[0].BlendOpAlpha = BLEND_OP_ADD;
 	bd.RenderTarget[0].RenderTargetWriteMask = COLOR_WRITE_ENABLE_ALL;
 	bd.IndependentBlendEnable = false;
-	wiRenderer::GetDevice()->CreateBlendState(&bd, &blendStates[BLENDMODE_ADDITIVE]);
+	blendStates[BLENDMODE_ADDITIVE] = bd;
 
 	bd.RenderTarget[0].BlendEnable = true;
 	bd.RenderTarget[0].SrcBlend = BLEND_ONE;
@@ -718,10 +719,10 @@ void wiEmittedParticle::Initialize()
 	bd.RenderTarget[0].BlendOpAlpha = BLEND_OP_ADD;
 	bd.RenderTarget[0].RenderTargetWriteMask = COLOR_WRITE_ENABLE_ALL;
 	bd.IndependentBlendEnable = false;
-	wiRenderer::GetDevice()->CreateBlendState(&bd, &blendStates[BLENDMODE_PREMULTIPLIED]);
+	blendStates[BLENDMODE_PREMULTIPLIED] = bd;
 
 	bd.RenderTarget[0].BlendEnable = false;
-	wiRenderer::GetDevice()->CreateBlendState(&bd, &blendStates[BLENDMODE_OPAQUE]);
+	blendStates[BLENDMODE_OPAQUE] = bd;
 
 	static wiEvent::Handle handle = wiEvent::Subscribe(SYSTEM_EVENT_RELOAD_SHADERS, [](uint64_t userdata) { wiEmittedParticle_Internal::LoadShaders(); });
 	wiEmittedParticle_Internal::LoadShaders();
