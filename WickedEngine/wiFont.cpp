@@ -328,8 +328,6 @@ namespace wiFont
 			device->CreateBuffer(&bd, nullptr, &constantBuffer);
 		}
 
-
-
 		RasterizerStateDesc rs;
 		rs.FillMode = FILL_SOLID;
 		rs.CullMode = CULL_FRONT;
