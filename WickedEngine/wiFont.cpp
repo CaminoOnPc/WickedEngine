@@ -266,58 +266,6 @@ namespace wiFont
 
 		GraphicsDevice* device = wiRenderer::GetDevice();
 
-	RasterizerState rs;
-	rs.FillMode = FILL_SOLID;
-	rs.CullMode = CULL_FRONT;
-	rs.FrontCounterClockwise = true;
-	rs.DepthBias = 0;
-	rs.DepthBiasClamp = 0;
-	rs.SlopeScaledDepthBias = 0;
-	rs.DepthClipEnable = false;
-	rs.MultisampleEnable = false;
-	rs.AntialiasedLineEnable = false;
-	rasterizerState = rs;
-
-	BlendState bd;
-	bd.RenderTarget[0].BlendEnable = true;
-	bd.RenderTarget[0].SrcBlend = BLEND_SRC_ALPHA;
-	bd.RenderTarget[0].DestBlend = BLEND_INV_SRC_ALPHA;
-	bd.RenderTarget[0].BlendOp = BLEND_OP_ADD;
-	bd.RenderTarget[0].SrcBlendAlpha = BLEND_ONE;
-	bd.RenderTarget[0].DestBlendAlpha = BLEND_ONE;
-	bd.RenderTarget[0].BlendOpAlpha = BLEND_OP_ADD;
-	bd.RenderTarget[0].RenderTargetWriteMask = COLOR_WRITE_ENABLE_ALL;
-	bd.IndependentBlendEnable = false;
-	blendState = bd;
-
-	DepthStencilState dsd;
-	dsd.DepthEnable = false;
-	dsd.StencilEnable = false;
-	depthStencilState = dsd;
-
-	SamplerDesc samplerDesc;
-	samplerDesc.Filter = FILTER_MIN_MAG_LINEAR_MIP_POINT;
-	samplerDesc.AddressU = TEXTURE_ADDRESS_BORDER;
-	samplerDesc.AddressV = TEXTURE_ADDRESS_BORDER;
-	samplerDesc.AddressW = TEXTURE_ADDRESS_BORDER;
-	samplerDesc.MipLODBias = 0.0f;
-	samplerDesc.MaxAnisotropy = 0;
-	samplerDesc.ComparisonFunc = COMPARISON_NEVER;
-	samplerDesc.BorderColor[0] = 0;
-	samplerDesc.BorderColor[1] = 0;
-	samplerDesc.BorderColor[2] = 0;
-	samplerDesc.BorderColor[3] = 0;
-	samplerDesc.MinLOD = 0;
-	samplerDesc.MaxLOD = FLT_MAX;
-	device->CreateSampler(&samplerDesc, &sampler);
-
-	static wiEvent::Handle handle1 = wiEvent::Subscribe(SYSTEM_EVENT_RELOAD_SHADERS, [](uint64_t userdata) { LoadShaders(); });
-	LoadShaders();
-
-
-	static wiEvent::Handle handle2 = wiEvent::Subscribe(SYSTEM_EVENT_CHANGE_DPI, [](uint64_t userdata) {
-		glyphLock.lock();
-		for (auto& x : glyph_lookup)
 		{
 			GPUBufferDesc bd;
 			bd.Usage = USAGE_DYNAMIC;
@@ -328,7 +276,9 @@ namespace wiFont
 			device->CreateBuffer(&bd, nullptr, &constantBuffer);
 		}
 
-		RasterizerStateDesc rs;
+
+
+		RasterizerState rs;
 		rs.FillMode = FILL_SOLID;
 		rs.CullMode = CULL_FRONT;
 		rs.FrontCounterClockwise = true;
@@ -338,9 +288,9 @@ namespace wiFont
 		rs.DepthClipEnable = false;
 		rs.MultisampleEnable = false;
 		rs.AntialiasedLineEnable = false;
-		device->CreateRasterizerState(&rs, &rasterizerState);
+		rasterizerState = rs;
 
-		BlendStateDesc bd;
+		BlendState bd;
 		bd.RenderTarget[0].BlendEnable = true;
 		bd.RenderTarget[0].SrcBlend = BLEND_SRC_ALPHA;
 		bd.RenderTarget[0].DestBlend = BLEND_INV_SRC_ALPHA;
@@ -350,12 +300,12 @@ namespace wiFont
 		bd.RenderTarget[0].BlendOpAlpha = BLEND_OP_ADD;
 		bd.RenderTarget[0].RenderTargetWriteMask = COLOR_WRITE_ENABLE_ALL;
 		bd.IndependentBlendEnable = false;
-		device->CreateBlendState(&bd, &blendState);
+		blendState = bd;
 
-		DepthStencilStateDesc dsd;
+		DepthStencilState dsd;
 		dsd.DepthEnable = false;
 		dsd.StencilEnable = false;
-		device->CreateDepthStencilState(&dsd, &depthStencilState);
+		depthStencilState = dsd;
 
 		SamplerDesc samplerDesc;
 		samplerDesc.Filter = FILTER_MIN_MAG_LINEAR_MIP_POINT;
