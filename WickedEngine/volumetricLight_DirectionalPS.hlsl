@@ -1,5 +1,5 @@
-#define DISABLE_TRANSPARENT_SHADOWMAP
 #define DISABLE_SOFT_SHADOWMAP
+#define TRANSPARENT_SHADOWMAP_SECONDARY_DEPTH_CHECK // fix the lack of depth testing
 #include "volumetricLightHF.hlsli"
 
 float4 main(VertexToPixel input) : SV_TARGET
@@ -13,7 +13,7 @@ float4 main(VertexToPixel input) : SV_TARGET
 	}
 
 	float2 ScreenCoord = input.pos2D.xy / input.pos2D.w * float2(0.5f, -0.5f) + 0.5f;
-	float depth = max(input.pos.z, texture_depth.SampleLevel(sampler_linear_clamp, ScreenCoord, 0));
+	float depth = max(input.pos.z, texture_depth.SampleLevel(sampler_point_clamp, ScreenCoord, 2));
 	float3 P = reconstructPosition(ScreenCoord, depth);
 	float3 V = g_xCamera_CamPos - P;
 	float cameraDistance = length(V);

@@ -118,6 +118,7 @@ static Atlas_Dim GenerateMeshAtlas(MeshComponent& meshcomponent, uint32_t resolu
 		std::vector<XMFLOAT3> positions(mesh.vertexCount);
 		std::vector<XMFLOAT2> atlas(mesh.vertexCount);
 		std::vector<XMFLOAT3> normals;
+		std::vector<XMFLOAT4> tangents;
 		std::vector<XMFLOAT2> uvset_0;
 		std::vector<XMFLOAT2> uvset_1;
 		std::vector<uint32_t> colors;
@@ -126,6 +127,10 @@ static Atlas_Dim GenerateMeshAtlas(MeshComponent& meshcomponent, uint32_t resolu
 		if (!meshcomponent.vertex_normals.empty())
 		{
 			normals.resize(mesh.vertexCount);
+		}
+		if (!meshcomponent.vertex_tangents.empty())
+		{
+			tangents.resize(mesh.vertexCount);
 		}
 		if (!meshcomponent.vertex_uvset_0.empty())
 		{
@@ -160,6 +165,10 @@ static Atlas_Dim GenerateMeshAtlas(MeshComponent& meshcomponent, uint32_t resolu
 			{
 				normals[ind] = meshcomponent.vertex_normals[v.xref];
 			}
+			if (!tangents.empty())
+			{
+				tangents[ind] = meshcomponent.vertex_tangents[v.xref];
+			}
 			if (!uvset_0.empty())
 			{
 				uvset_0[ind] = meshcomponent.vertex_uvset_0[v.xref];
@@ -187,6 +196,10 @@ static Atlas_Dim GenerateMeshAtlas(MeshComponent& meshcomponent, uint32_t resolu
 		if (!normals.empty())
 		{
 			meshcomponent.vertex_normals = normals;
+		}
+		if (!tangents.empty())
+		{
+			meshcomponent.vertex_tangents = tangents;
 		}
 		if (!uvset_0.empty())
 		{
@@ -277,8 +290,8 @@ void ObjectWindow::Create(EditorComponent* editor)
 	});
 	AddWidget(&renderableCheckBox);
 
-	ditherSlider.Create(0, 1, 0, 1000, "Dither: ");
-	ditherSlider.SetTooltip("Adjust dithered transparency of the object. This disables some optimizations so performance can be affected.");
+	ditherSlider.Create(0, 1, 0, 1000, "Transparency: ");
+	ditherSlider.SetTooltip("Adjust transparency of the object. Opaque materials will use dithered transparency in this case!");
 	ditherSlider.SetSize(XMFLOAT2(100, hei));
 	ditherSlider.SetPos(XMFLOAT2(x, y += step));
 	ditherSlider.OnSlide([&](wiEventArgs args) {
@@ -731,6 +744,14 @@ void ObjectWindow::Create(EditorComponent* editor)
 
 	y = 10;
 
+	colorComboBox.Create("Color picker mode: ");
+	colorComboBox.SetSize(XMFLOAT2(120, hei));
+	colorComboBox.SetPos(XMFLOAT2(x + 300, y += step));
+	colorComboBox.AddItem("Base color");
+	colorComboBox.AddItem("Emissive color");
+	colorComboBox.SetTooltip("Choose the destination data of the color picker.");
+	AddWidget(&colorComboBox);
+
 	colorPicker.Create("Object Color", false);
 	colorPicker.SetPos(XMFLOAT2(350, y += step));
 	colorPicker.SetVisible(true);
@@ -739,8 +760,19 @@ void ObjectWindow::Create(EditorComponent* editor)
 		ObjectComponent* object = wiScene::GetScene().objects.GetComponent(entity);
 		if (object != nullptr)
 		{
-			XMFLOAT3 col = args.color.toFloat3();
-			object->color = XMFLOAT4(col.x, col.y, col.z, object->color.w);
+			switch (colorComboBox.GetSelected())
+			{
+			default:
+			case 0:
+			{
+				XMFLOAT3 col = args.color.toFloat3();
+				object->color = XMFLOAT4(col.x, col.y, col.z, object->color.w);
+			}
+			break;
+			case 1:
+				object->emissiveColor = args.color.toFloat4();
+				break;
+			}
 		}
 		});
 	AddWidget(&colorPicker);
@@ -774,7 +806,17 @@ void ObjectWindow::SetEntity(Entity entity)
 		renderableCheckBox.SetCheck(object->IsRenderable());
 		cascadeMaskSlider.SetValue((float)object->cascadeMask);
 		ditherSlider.SetValue(object->GetTransparency());
-		colorPicker.SetPickColor(wiColor::fromFloat4(object->color));
+
+		switch (colorComboBox.GetSelected())
+		{
+		default:
+		case 0:
+			colorPicker.SetPickColor(wiColor::fromFloat4(object->color));
+			break;
+		case 1:
+			colorPicker.SetPickColor(wiColor::fromFloat4(object->emissiveColor));
+			break;
+		}
 
 	}
 	else

@@ -46,12 +46,12 @@ float CalculateEdgeFade(float2 hitPixel)
 	return attenuation;
 }
 
-void GetSampleInfo(float2 neighborUV, float2 uv, float3 P, float3 V, float3 N, float NdotV, float specularConeTangent, float roughness, out float4 sampleColor, out float weight)
+void GetSampleInfo(float2 velocity, float2 neighborUV, float2 uv, float3 P, float3 V, float3 N, float NdotV, float specularConeTangent, float roughness, out float4 sampleColor, out float weight)
 {
     // Sample local pixel information
 	float4 raytraceSource = texture_raytrace.SampleLevel(sampler_point_clamp, neighborUV, 0);
     
-	float2 hitPixel = raytraceSource.xy;
+	float2 hitPixel = raytraceSource.xy + velocity;
 	float hitDepth = raytraceSource.z;
 	float hitPDF = raytraceSource.w;
 
@@ -72,16 +72,16 @@ void GetSampleInfo(float2 neighborUV, float2 uv, float3 P, float3 V, float3 N, f
 	float NdotL = saturate(dot(N, L));
     
 	Surface surface;
-	surface.alphaRoughnessSq = pow(roughness, 4);
+	surface.roughnessBRDF = roughness * roughness;
+	surface.NdotV = NdotV;
     
 	SurfaceToLight surfaceToLight;
 	surfaceToLight.NdotH = NdotH;
 	surfaceToLight.NdotL = NdotL;
-	surfaceToLight.NdotV = NdotV;
     
     // Calculate BRDF where Fresnel = 1
-	float Vis = visibilityOcclusion(surface, surfaceToLight);
-	float D = microfacetDistribution(surface, surfaceToLight);
+	float Vis = V_SmithGGXCorrelated(surface.roughnessBRDF, surface.NdotV, surfaceToLight.NdotL);
+	float D = D_GGX(surface.roughnessBRDF, surfaceToLight.NdotH, surfaceToLight.H);
 	float specularLight = Vis * D * PI / 4.0;
 
 	weight = specularLight / max(hitPDF, 0.00001f);
@@ -91,17 +91,21 @@ void GetSampleInfo(float2 neighborUV, float2 uv, float3 P, float3 V, float3 N, f
 void main(uint3 DTid : SV_DispatchThreadID)
 {
 	const float2 uv = (DTid.xy + 0.5f) * xPPResolution_rcp;
-	const float depth = texture_depth.SampleLevel(sampler_point_clamp, uv, 0);
+	const float depth = texture_depth.SampleLevel(sampler_point_clamp, uv, 1);
 	if (depth == 0.0f)
 		return;
 
+	const float2 velocity = texture_gbuffer2.SampleLevel(sampler_point_clamp, uv, 0).xy;
+	const float2 prevUV = uv + velocity;
+
     // Everthing in view space:
+	const float4 g1 = texture_gbuffer1.SampleLevel(sampler_linear_clamp, prevUV, 0);
 	const float3 P = reconstructPosition(uv, depth, g_xCamera_InvP);
-	const float3 N = mul((float3x3) g_xCamera_View, decodeNormal(texture_gbuffer1.SampleLevel(sampler_point_clamp, uv, 0).xy)).xyz;
+	const float3 N = normalize(mul((float3x3)g_xCamera_View, g1.rgb * 2 - 1).xyz);
 	const float3 V = normalize(-P);
 	const float NdotV = saturate(dot(N, V));
     
-	const float roughness = GetRoughness(texture_gbuffer0.SampleLevel(sampler_point_clamp, uv, 0).a);
+	const float roughness = GetRoughness(g1.a);
 
     // Early out, useless if the roughness is out of range
 	float roughnessFade = GetRoughnessFade(roughness, SSRMaxRoughness);
@@ -115,7 +119,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
 	if (roughness < 0.05f)
 	{
 		float4 raytraceSource = texture_raytrace.SampleLevel(sampler_point_clamp, uv, 0);
-		float2 hitPixel = raytraceSource.xy;
+		float2 hitPixel = raytraceSource.xy + velocity;
 		
 		float4 sampleColor;
 		sampleColor.rgb = texture_main.SampleLevel(sampler_linear_clamp, hitPixel, 0).rgb; // Scene color
@@ -153,7 +157,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
             
 			float4 sampleColor;
 			float weight;
-			GetSampleInfo(neighborUV, uv, P, V, N, NdotV, specularConeTangent, roughness, sampleColor, weight);
+			GetSampleInfo(velocity, neighborUV, uv, P, V, N, NdotV, specularConeTangent, roughness, sampleColor, weight);
             
 			sampleColor.rgb *= rcp(1 + Luminance(sampleColor.rgb));
             
@@ -184,7 +188,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
         
 		float4 sampleColor;
 		float weight;
-		GetSampleInfo(neighborUV, uv, P, V, N, NdotV, specularConeTangent, roughness, sampleColor, weight);
+		GetSampleInfo(velocity, neighborUV, uv, P, V, N, NdotV, specularConeTangent, roughness, sampleColor, weight);
         
 		sampleColor.rgb *= rcp( 1 + Luminance(sampleColor.rgb) );
 		

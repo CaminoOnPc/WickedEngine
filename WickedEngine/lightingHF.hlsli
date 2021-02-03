@@ -19,6 +19,8 @@ struct Lighting
 {
 	LightingPart direct;
 	LightingPart indirect;
+	uint4 shadow_mask;
+	uint shadow_index;
 
 	inline void create(
 		in float3 diffuse_direct,
@@ -31,6 +33,8 @@ struct Lighting
 		direct.specular = specular_direct;
 		indirect.diffuse = diffuse_indirect;
 		indirect.specular = specular_indirect;
+		shadow_mask = 1; // fully lit by default
+		shadow_index = 0;
 	}
 };
 
@@ -39,7 +43,7 @@ inline LightingPart CombineLighting(in Surface surface, in Lighting lighting)
 {
 	LightingPart result;
 	result.diffuse = lighting.direct.diffuse + lighting.indirect.diffuse * surface.occlusion;
-	result.specular = lighting.direct.specular + lighting.indirect.specular * surface.F * surface.occlusion;
+	result.specular = lighting.direct.specular + lighting.indirect.specular * surface.occlusion;
 
 	return result;
 }
@@ -68,19 +72,25 @@ inline float3 shadowCascade(in ShaderEntity light, in float3 shadowPos, in float
 #ifndef DISABLE_TRANSPARENT_SHADOWMAP
 	if (g_xFrame_Options & OPTION_BIT_TRANSPARENTSHADOWS_ENABLED)
 	{
-		shadow *= texture_shadowarray_transparent.SampleLevel(sampler_linear_clamp, float3(shadowUV, slice), 0);
+		float4 transparent_shadow = texture_shadowarray_transparent_2d.SampleLevel(sampler_linear_clamp, float3(shadowUV, slice), 0);
+#ifdef TRANSPARENT_SHADOWMAP_SECONDARY_DEPTH_CHECK
+		if (transparent_shadow.a > realDistance)
+#endif // TRANSPARENT_SHADOWMAP_SECONDARY_DEPTH_CHECK
+		{
+			shadow *= transparent_shadow.rgb;
+		}
 	}
 #endif //DISABLE_TRANSPARENT_SHADOWMAP
 
 	return shadow;
 }
 
-inline float shadowCube(in ShaderEntity light, in float3 L, in float3 Lunnormalized)
+inline float3 shadowCube(in ShaderEntity light, in float3 L, in float3 Lunnormalized)
 {
 	const float slice = light.GetTextureIndex();
 	float remappedDistance = light.GetCubemapDepthRemapNear() +
 		light.GetCubemapDepthRemapFar() / (max(max(abs(Lunnormalized.x), abs(Lunnormalized.y)), abs(Lunnormalized.z)) * 0.989); // little bias to avoid border sampling artifact
-	float shadow = 0;
+	float3 shadow = 0;
 #ifndef DISABLE_SOFT_SHADOWMAP
 	// sample along a cube pattern around center:
 	L = -L;
@@ -97,6 +107,20 @@ inline float shadowCube(in ShaderEntity light, in float3 L, in float3 Lunnormali
 #else
 	shadow = texture_shadowarray_cube.SampleCmpLevelZero(sampler_cmp_depth, float4(-Lunnormalized, slice), remappedDistance).r;
 #endif // DISABLE_SOFT_SHADOWMAP
+
+#ifndef DISABLE_TRANSPARENT_SHADOWMAP
+	if (g_xFrame_Options & OPTION_BIT_TRANSPARENTSHADOWS_ENABLED)
+	{
+		float4 transparent_shadow = texture_shadowarray_transparent_cube.SampleLevel(sampler_linear_clamp, float4(-Lunnormalized, slice), 0);
+#ifdef TRANSPARENT_SHADOWMAP_SECONDARY_DEPTH_CHECK
+		if (transparent_shadow.a > remappedDistance)
+#endif // TRANSPARENT_SHADOWMAP_SECONDARY_DEPTH_CHECK
+		{
+			shadow *= transparent_shadow.rgb;
+		}
+	}
+#endif //DISABLE_TRANSPARENT_SHADOWMAP
+
 	return shadow;
 }
 
@@ -149,7 +173,7 @@ inline float shadowTrace(in Surface surface, in float3 L, in float dist)
 
 inline void DirectionalLight(in ShaderEntity light, in Surface surface, inout Lighting lighting)
 {
-	float3 L = light.GetDirection().xyz;
+	float3 L = light.GetDirection();
 
 	SurfaceToLight surfaceToLight;
 	surfaceToLight.create(surface, L);
@@ -205,6 +229,17 @@ inline void DirectionalLight(in ShaderEntity light, in Surface surface, inout Li
 					}
 				}
 			}
+
+#ifdef SHADOW_MASK_ENABLED
+			[branch]
+			if (g_xFrame_Options & OPTION_BIT_SHADOW_MASK)
+			{
+				uint mask_shift = (lighting.shadow_index % 4) * 8;
+				uint mask_bucket = lighting.shadow_index / 4;
+				uint mask = (lighting.shadow_mask[mask_bucket] >> mask_shift) & 0xFF;
+				shadow *= mask / 255.0;
+			}
+#endif // SHADOW_MASK_ENABLED
 		}
 
 		[branch]
@@ -226,6 +261,22 @@ inline void DirectionalLight(in ShaderEntity light, in Surface surface, inout Li
 				max(0, lightColor * surfaceToLight.NdotL * BRDF_GetSpecular(surface, surfaceToLight));
 		}
 	}
+
+#ifdef SHADOW_MASK_ENABLED
+#ifndef RAYTRACING_INLINE
+	[branch]
+	if (light.IsCastingShadow())
+	{
+		// The shadow contribution for raytraced shadow is detected slightly differently
+		//	in pixel shaders and raytracing step
+		//	So if light is shadowed, we always increment shadow index, even if actual
+		//	contribution might have been skipped.
+		//
+		//	Read more about this in rtshadowLIB.hlsl file (**)
+		lighting.shadow_index++;
+	}
+#endif // RAYTRACING_INLINE
+#endif // SHADOW_MASK_ENABLED
 }
 inline void PointLight(in ShaderEntity light, in Surface surface, inout Lighting lighting)
 {
@@ -246,7 +297,7 @@ inline void PointLight(in ShaderEntity light, in Surface surface, inout Lighting
 		[branch]
 		if (any(surfaceToLight.NdotL_sss))
 		{
-			float shadow = 1;
+			float3 shadow = 1;
 
 			[branch]
 			if (light.IsCastingShadow())
@@ -260,6 +311,17 @@ inline void PointLight(in ShaderEntity light, in Surface surface, inout Lighting
 				{
 					shadow *= shadowCube(light, L, Lunnormalized);
 				}
+
+#ifdef SHADOW_MASK_ENABLED
+				[branch]
+				if (g_xFrame_Options & OPTION_BIT_SHADOW_MASK)
+				{
+					uint mask_shift = (lighting.shadow_index % 4) * 8;
+					uint mask_bucket = lighting.shadow_index / 4;
+					uint mask = (lighting.shadow_mask[mask_bucket] >> mask_shift) & 0xFF;
+					shadow *= mask / 255.0;
+				}
+#endif // SHADOW_MASK_ENABLED
 			}
 
 			[branch]
@@ -279,6 +341,22 @@ inline void PointLight(in ShaderEntity light, in Surface surface, inout Lighting
 			}
 		}
 	}
+
+#ifdef SHADOW_MASK_ENABLED
+#ifndef RAYTRACING_INLINE
+	[branch]
+	if (light.IsCastingShadow())
+	{
+		// The shadow contribution for raytraced shadow is detected slightly differently
+		//	in pixel shaders and raytracing step
+		//	So if light is shadowed, we always increment shadow index, even if actual
+		//	contribution might have been skipped.
+		//
+		//	Read more about this in rtshadowLIB.hlsl file (**)
+		lighting.shadow_index++;
+	}
+#endif // RAYTRACING_INLINE
+#endif // SHADOW_MASK_ENABLED
 }
 inline void SpotLight(in ShaderEntity light, in Surface surface, inout Lighting lighting)
 {
@@ -325,6 +403,17 @@ inline void SpotLight(in ShaderEntity light, in Surface surface, inout Lighting 
 							shadow *= shadowCascade(light, ShPos.xyz, ShTex.xy, 0);
 						}
 					}
+
+#ifdef SHADOW_MASK_ENABLED
+					[branch]
+					if (g_xFrame_Options & OPTION_BIT_SHADOW_MASK)
+					{
+						uint mask_shift = (lighting.shadow_index % 4) * 8;
+						uint mask_bucket = lighting.shadow_index / 4;
+						uint mask = (lighting.shadow_mask[mask_bucket] >> mask_shift) & 0xFF;
+						shadow *= mask / 255.0;
+					}
+#endif // SHADOW_MASK_ENABLED
 				}
 
 				[branch]
@@ -346,6 +435,22 @@ inline void SpotLight(in ShaderEntity light, in Surface surface, inout Lighting 
 			}
 		}
 	}
+
+#ifdef SHADOW_MASK_ENABLED
+#ifndef RAYTRACING_INLINE
+	[branch]
+	if (light.IsCastingShadow())
+	{
+		// The shadow contribution for raytraced shadow is detected slightly differently
+		//	in pixel shaders and raytracing step
+		//	So if light is shadowed, we always increment shadow index, even if actual
+		//	contribution might have been skipped.
+		//
+		//	Read more about this in rtshadowLIB.hlsl file (**)
+		lighting.shadow_index++;
+	}
+#endif // RAYTRACING_INLINE
+#endif // SHADOW_MASK_ENABLED
 }
 
 
@@ -816,7 +921,7 @@ inline void VoxelGI(in Surface surface, inout Lighting lighting)
 		{
 			float4 reflection = ConeTraceReflection(texture_voxelradiance, surface.P, surface.N, surface.V, surface.roughness);
 
-			lighting.indirect.specular = lerp(lighting.indirect.specular, reflection.rgb, reflection.a * blend);
+			lighting.indirect.specular = lerp(lighting.indirect.specular, reflection.rgb * surface.F, reflection.a * blend);
 		}
 	}
 }
@@ -829,21 +934,20 @@ inline float3 GetAmbient(in float3 N)
 {
 	float3 ambient;
 
-#ifndef ENVMAPRENDERING
-	[branch]
-	if (g_xFrame_GlobalEnvProbeIndex >= 0)
-	{
-		ambient = texture_envmaparray.SampleLevel(sampler_linear_clamp, float4(N, g_xFrame_GlobalEnvProbeIndex), g_xFrame_EnvProbeMipCount).rgb;
-	}
-	else
+#ifdef ENVMAPRENDERING
+
+	// Set realistic_sky_stationary to true so we capture ambient at float3(0.0, 0.0, 0.0), similar to the standard sky to avoid flickering and weird behavior
+	ambient = lerp(
+		GetDynamicSkyColor(float3(0, -1, 0), false, false, false, true),
+		GetDynamicSkyColor(float3(0, 1, 0), false, false, false, true),
+		saturate(N.y * 0.5 + 0.5));
+
+#else
+
+	ambient = texture_envmaparray.SampleLevel(sampler_linear_clamp, float4(N, g_xFrame_GlobalEnvProbeIndex), g_xFrame_EnvProbeMipCount).rgb;
+	ambient += GetAmbientColor();
+
 #endif // ENVMAPRENDERING
-	{
-		// Also set realistic_sky_stationary to true so we capture ambient at float3(0.0, 0.0, 0.0), similar to the standard sky to avoid flickering and weird behavior
-		ambient = lerp(
-			GetDynamicSkyColor(float3(0, -1, 0), false, false, false, true),
-			GetDynamicSkyColor(float3(0, 1, 0), false, false, false, true),
-			saturate(N.y * 0.5 + 0.5)) + GetAmbientColor();
-	}
 
 	return ambient;
 }
@@ -851,30 +955,40 @@ inline float3 GetAmbient(in float3 N)
 // surface:				surface descriptor
 // MIP:					mip level to sample
 // return:				color of the environment color (rgb)
-inline float3 EnvironmentReflection_Global(in Surface surface, in float MIP)
+inline float3 EnvironmentReflection_Global(in Surface surface)
 {
 	float3 envColor;
 
-#ifndef ENVMAPRENDERING
-	[branch]
-	if (g_xFrame_GlobalEnvProbeIndex >= 0)
-	{
-		// We have envmap information in a texture:
-		envColor = texture_envmaparray.SampleLevel(sampler_linear_clamp, float4(surface.R, g_xFrame_GlobalEnvProbeIndex), MIP).rgb;
-	}
-	else
+#ifdef ENVMAPRENDERING
+
+	// There is no access to envmaps, so approximate sky color:
+	// Set realistic_sky_stationary to true so we capture environment at float3(0.0, 0.0, 0.0), similar to the standard sky to avoid flickering and weird behavior
+	float3 realSkyColor = GetDynamicSkyColor(surface.R, false, false, false, true); // false: disable sun disk and clouds
+	float3 roughSkyColor = lerp(
+		GetDynamicSkyColor(float3(0, -1, 0), false, false, false, true),
+		GetDynamicSkyColor(float3(0, 1, 0), false, false, false, true),
+		saturate(surface.R.y * 0.5 + 0.5));
+
+	envColor = lerp(realSkyColor, roughSkyColor, saturate(surface.roughness)) * surface.F;
+
+#else
+
+	float MIP = surface.roughness * g_xFrame_EnvProbeMipCount;
+	envColor = texture_envmaparray.SampleLevel(sampler_linear_clamp, float4(surface.R, g_xFrame_GlobalEnvProbeIndex), MIP).rgb * surface.F;
+
+#ifdef BRDF_SHEEN
+	envColor *= surface.sheen.albedoScaling;
+	MIP = surface.sheen.roughness * g_xFrame_EnvProbeMipCount;
+	envColor += texture_envmaparray.SampleLevel(sampler_linear_clamp, float4(surface.R, g_xFrame_GlobalEnvProbeIndex), MIP).rgb * surface.sheen.color * surface.sheen.DFG;
+#endif // BRDF_SHEEN
+
+#ifdef BRDF_CLEARCOAT
+	envColor *= 1 - surface.clearcoat.F;
+	MIP = surface.clearcoat.roughness * g_xFrame_EnvProbeMipCount;
+	envColor += texture_envmaparray.SampleLevel(sampler_linear_clamp, float4(surface.clearcoat.R, g_xFrame_GlobalEnvProbeIndex), MIP).rgb * surface.clearcoat.F;
+#endif // BRDF_CLEARCOAT
+
 #endif // ENVMAPRENDERING
-	{
-		// There are no envmaps, approximate sky color:
-		// Also set realistic_sky_stationary to true so we capture environment at float3(0.0, 0.0, 0.0), similar to the standard sky to avoid flickering and weird behavior
-		float3 realSkyColor = GetDynamicSkyColor(surface.R, false, false, false, true); // false: disable sun disk and clouds
-		float3 roughSkyColor = lerp(
-			GetDynamicSkyColor(float3(0, -1, 0), false, false, false, true),
-			GetDynamicSkyColor(float3(0, 1, 0), false, false, false, true),
-			saturate(surface.R.y * 0.5 + 0.5));
-		
-		envColor = lerp(realSkyColor, roughSkyColor, saturate(surface.roughness));
-	}
 
 	return envColor;
 }
@@ -885,7 +999,7 @@ inline float3 EnvironmentReflection_Global(in Surface surface, in float MIP)
 // clipSpacePos:		world space pixel position transformed into OBB space by probeProjection matrix
 // MIP:					mip level to sample
 // return:				color of the environment map (rgb), blend factor of the environment map (a)
-inline float4 EnvironmentReflection_Local(in Surface surface, in ShaderEntity probe, in float4x4 probeProjection, in float3 clipSpacePos, in float MIP)
+inline float4 EnvironmentReflection_Local(in Surface surface, in ShaderEntity probe, in float4x4 probeProjection, in float3 clipSpacePos)
 {
 	// Perform parallax correction of reflection ray (R) into OBB:
 	float3 RayLS = mul(surface.R, (float3x3)probeProjection);
@@ -897,11 +1011,33 @@ inline float4 EnvironmentReflection_Local(in Surface surface, in ShaderEntity pr
 	float3 R_parallaxCorrected = IntersectPositionWS - probe.position;
 
 	// Sample cubemap texture:
-	float3 envmapColor = texture_envmaparray.SampleLevel(sampler_linear_clamp, float4(R_parallaxCorrected, probe.GetTextureIndex()), MIP).rgb; // GetFlags() stores textureIndex here...
+	float MIP = surface.roughness * g_xFrame_EnvProbeMipCount;
+	float3 envColor = texture_envmaparray.SampleLevel(sampler_linear_clamp, float4(R_parallaxCorrected, probe.GetTextureIndex()), MIP).rgb * surface.F;
+
+#ifdef BRDF_SHEEN
+	envColor *= surface.sheen.albedoScaling;
+	MIP = surface.sheen.roughness * g_xFrame_EnvProbeMipCount;
+	envColor += texture_envmaparray.SampleLevel(sampler_linear_clamp, float4(R_parallaxCorrected, probe.GetTextureIndex()), MIP).rgb * surface.sheen.color * surface.sheen.DFG;
+#endif // BRDF_SHEEN
+
+#ifdef BRDF_CLEARCOAT
+	RayLS = mul(surface.clearcoat.R, (float3x3)probeProjection);
+	FirstPlaneIntersect = (float3(1, 1, 1) - clipSpacePos) / RayLS;
+	SecondPlaneIntersect = (-float3(1, 1, 1) - clipSpacePos) / RayLS;
+	FurthestPlane = max(FirstPlaneIntersect, SecondPlaneIntersect);
+	Distance = min(FurthestPlane.x, min(FurthestPlane.y, FurthestPlane.z));
+	IntersectPositionWS = surface.P + surface.clearcoat.R * Distance;
+	R_parallaxCorrected = IntersectPositionWS - probe.position;
+
+	envColor *= 1 - surface.clearcoat.F;
+	MIP = surface.clearcoat.roughness * g_xFrame_EnvProbeMipCount;
+	envColor += texture_envmaparray.SampleLevel(sampler_linear_clamp, float4(R_parallaxCorrected, probe.GetTextureIndex()), MIP).rgb * surface.clearcoat.F;
+#endif // BRDF_CLEARCOAT
+
 	// blend out if close to any cube edge:
 	float edgeBlend = 1 - pow(saturate(max(abs(clipSpacePos.x), max(abs(clipSpacePos.y), abs(clipSpacePos.z)))), 8);
 
-	return float4(envmapColor, edgeBlend);
+	return float4(envColor, edgeBlend);
 }
 
 #endif // WI_LIGHTING_HF

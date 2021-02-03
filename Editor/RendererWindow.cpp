@@ -232,7 +232,7 @@ void RendererWindow::Create(EditorComponent* editor)
 	shadowTypeComboBox.SetSize(XMFLOAT2(100, itemheight));
 	shadowTypeComboBox.SetPos(XMFLOAT2(x, y += step));
 	shadowTypeComboBox.AddItem("Shadowmaps");
-	if (wiRenderer::GetDevice()->CheckCapability(wiGraphics::GRAPHICSDEVICE_CAPABILITY_RAYTRACING_INLINE))
+	if (wiRenderer::GetDevice()->CheckCapability(wiGraphics::GRAPHICSDEVICE_CAPABILITY_RAYTRACING))
 	{
 		shadowTypeComboBox.AddItem("Ray traced");
 	}
@@ -380,7 +380,7 @@ void RendererWindow::Create(EditorComponent* editor)
 		wiRenderer::SetRaytracedShadowsSampleCount((uint32_t)args.iValue);
 		});
 	AddWidget(&raytracedShadowsSlider);
-	if (!wiRenderer::GetDevice()->CheckCapability(wiGraphics::GRAPHICSDEVICE_CAPABILITY_RAYTRACING_INLINE))
+	if (!wiRenderer::GetDevice()->CheckCapability(wiGraphics::GRAPHICSDEVICE_CAPABILITY_RAYTRACING))
 	{
 		raytracedShadowsSlider.SetEnabled(false);
 	}
@@ -434,7 +434,7 @@ void RendererWindow::Create(EditorComponent* editor)
 			break;
 		}
 
-		wiRenderer::ModifySampler(desc, SSLOT_OBJECTSHADER);
+		wiRenderer::ModifyObjectSampler(desc);
 
 	});
 	textureQualityComboBox.SetSelected(3);
@@ -448,7 +448,7 @@ void RendererWindow::Create(EditorComponent* editor)
 	mipLodBiasSlider.OnSlide([&](wiEventArgs args) {
 		wiGraphics::SamplerDesc desc = wiRenderer::GetSampler(SSLOT_OBJECTSHADER)->GetDesc();
 		desc.MipLODBias = wiMath::Clamp(args.fValue, -15.9f, 15.9f);
-		wiRenderer::ModifySampler(desc, SSLOT_OBJECTSHADER);
+		wiRenderer::ModifyObjectSampler(desc);
 	});
 	AddWidget(&mipLodBiasSlider);
 

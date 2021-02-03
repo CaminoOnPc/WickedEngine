@@ -76,7 +76,7 @@ struct TerraGen : public wiWindow
 void MeshWindow::Create(EditorComponent* editor)
 {
 	wiWindow::Create("Mesh Window");
-	SetSize(XMFLOAT2(580, 500));
+	SetSize(XMFLOAT2(580, 520));
 
 	float x = 150;
 	float y = 0;
@@ -514,6 +514,7 @@ void MeshWindow::Create(EditorComponent* editor)
 			params.extensions.push_back("jpg");
 			params.extensions.push_back("jpeg");
 			params.extensions.push_back("tga");
+			params.extensions.push_back("bmp");
 			wiHelper::FileDialog(params, [=](std::string fileName) {
 				wiEvent::Subscribe_Once(SYSTEM_EVENT_THREAD_SAFE_POINT, [=](uint64_t userdata) {
 					if (terragen.rgb != nullptr)
@@ -598,7 +599,9 @@ void MeshWindow::SetEntity(Entity entity)
 		if (mesh->vertexBuffer_COL.IsValid()) ss << "color; ";
 		if (mesh->vertexBuffer_PRE.IsValid()) ss << "prevPos; ";
 		if (mesh->vertexBuffer_BON.IsValid()) ss << "bone; ";
-		if (mesh->streamoutBuffer_POS.IsValid()) ss << "streamout; ";
+		if (mesh->vertexBuffer_TAN.IsValid()) ss << "tangent; ";
+		if (mesh->streamoutBuffer_POS.IsValid()) ss << "streamout_position; ";
+		if (mesh->streamoutBuffer_TAN.IsValid()) ss << "streamout_tangents; ";
 		if (mesh->IsTerrain()) ss << endl << endl << "Terrain will use 4 blend materials and blend by vertex colors, the default one is always the subset material and uses RED vertex color channel mask, the other 3 are selectable below.";
 		meshInfoLabel.SetText(ss.str());
 

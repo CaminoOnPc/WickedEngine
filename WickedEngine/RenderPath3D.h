@@ -35,6 +35,8 @@ private:
 	uint32_t aoSampleCount = 16;
 	float aoPower = 2.0f;
 	float chromaticAberrationAmount = 2.0f;
+	uint32_t screenSpaceShadowSampleCount = 16;
+	float screenSpaceShadowRange = 1;
 
 	AO ao = AO_DISABLED;
 	bool fxaaEnabled = false;
@@ -60,7 +62,7 @@ private:
 
 	uint32_t msaaSampleCount = 1;
 
-protected:
+public:
 	wiGraphics::Texture rtGbuffer[GBUFFER_COUNT];
 	wiGraphics::Texture rtGbuffer_resolved[GBUFFER_COUNT];
 	wiGraphics::Texture rtReflection; // contains the scene rendered for planar reflections
@@ -75,6 +77,7 @@ protected:
 	wiGraphics::Texture rtBloom; // contains the bright parts of the image + mipchain
 	wiGraphics::Texture rtBloom_tmp; // temporary for bloom downsampling
 	wiGraphics::Texture rtAO; // full res AO
+	wiGraphics::Texture rtShadow; // raytraced shadows mask
 	wiGraphics::Texture rtSun[2]; // 0: sun render target used for lightshafts (can be MSAA), 1: radial blurred lightshafts
 	wiGraphics::Texture rtSun_resolved; // sun render target, but the resolved version if MSAA is enabled
 	wiGraphics::Texture rtGUIBlurredBackground[3];	// downsampled, gaussian blurred scene for GUI
@@ -148,8 +151,6 @@ protected:
 	virtual void RenderSceneMIPChain(wiGraphics::CommandList cmd) const;
 	virtual void RenderTransparents(wiGraphics::CommandList cmd) const;
 	virtual void RenderPostprocessChain(wiGraphics::CommandList cmd) const;
-	
-public:
 
 	void ResizeBuffers() override;
 
@@ -180,6 +181,8 @@ public:
 	constexpr uint32_t getAOSampleCount() const { return aoSampleCount; }
 	constexpr float getAOPower() const { return aoPower; }
 	constexpr float getChromaticAberrationAmount() const { return chromaticAberrationAmount; }
+	constexpr uint32_t getScreenSpaceShadowSampleCount() const { return screenSpaceShadowSampleCount; }
+	constexpr float getScreenSpaceShadowRange() const { return screenSpaceShadowRange; }
 
 	constexpr bool getAOEnabled() const { return ao != AO_DISABLED; }
 	constexpr AO getAO() const { return ao; }
@@ -190,7 +193,7 @@ public:
 	constexpr bool getFXAAEnabled() const { return fxaaEnabled; }
 	constexpr bool getBloomEnabled() const { return bloomEnabled; }
 	constexpr bool getVolumetricCloudsEnabled() const { return volumetricCloudsEnabled; }
-	constexpr bool getColorGradingEnabled() const { return colorGradingEnabled; }
+	constexpr bool getColorGradingEnabled() const { return colorGradingEnabled && colorGradingTex != nullptr; }
 	constexpr bool getVolumeLightsEnabled() const { return volumeLightsEnabled; }
 	constexpr bool getLightShaftsEnabled() const { return lightShaftsEnabled; }
 	constexpr bool getLensFlareEnabled() const { return lensFlareEnabled; }
@@ -220,6 +223,8 @@ public:
 	constexpr void setAOSampleCount(uint32_t value) { aoSampleCount = value; }
 	constexpr void setAOPower(float value) { aoPower = value; }
 	constexpr void setChromaticAberrationAmount(float value) { chromaticAberrationAmount = value; }
+	constexpr void setScreenSpaceShadowSampleCount(uint32_t value) { screenSpaceShadowSampleCount = value; }
+	constexpr void setScreenSpaceShadowRange(float value) { screenSpaceShadowRange = value; }
 
 	constexpr void setAO(AO value) { ao = value; }
 	constexpr void setSSREnabled(bool value){ ssrEnabled = value; }

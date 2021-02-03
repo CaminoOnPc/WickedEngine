@@ -1,15 +1,9 @@
-#include "globals.hlsli"
+#define OBJECTSHADER_LAYOUT_POS_TEX
+#define OBJECTSHADER_USE_COLOR
 #include "objectHF.hlsli"
 
-struct VertextoPixel
-{
-	float4 pos				: SV_POSITION;
-	float4 color			: COLOR;
-	float4 uvsets			: UVSETS;
-};
-
 [earlydepthstencil]
-float4 main(VertextoPixel input) : SV_TARGET
+float4 main(PixelInput input) : SV_TARGET
 {
 	float2 pixel = input.pos.xy;
 
@@ -42,7 +36,7 @@ float4 main(VertextoPixel input) : SV_TARGET
 		const float2 UV_normalMap = g_xMaterial.uvset_normalMap == 0 ? input.uvsets.xy : input.uvsets.zw;
 		bumpColor0 = 2.0f * texture_normalmap.Sample(sampler_objectshader, UV_normalMap - g_xMaterial.texMulAdd.ww).rg - 1.0f;
 		bumpColor1 = 2.0f * texture_normalmap.Sample(sampler_objectshader, UV_normalMap + g_xMaterial.texMulAdd.zw).rg - 1.0f;
-		bumpColor = float3(bumpColor0 + bumpColor1 + bumpColor2, 1)  * g_xMaterial.refractionIndex;
+		bumpColor = float3(bumpColor0 + bumpColor1 + bumpColor2, 1)  * g_xMaterial.refraction;
 		bumpColor.rg *= g_xMaterial.normalMapStrength;
 		bumpColor = normalize(max(bumpColor, float3(0, 0, 0.0001f)));
 
@@ -53,6 +47,8 @@ float4 main(VertextoPixel input) : SV_TARGET
 
 		color.rgb += caustic;
 	}
+
+	color.a = input.pos.z; // secondary depth
 
 	return color;
 }

@@ -36,7 +36,10 @@ namespace wiScene
 	{
 		uint32_t layerMask = ~0;
 
-		inline uint32_t GetLayerMask() const { return layerMask; }
+		// Non-serialized attributes:
+		uint32_t propagationMask = ~0; // This shouldn't be modified by user usually
+
+		inline uint32_t GetLayerMask() const { return layerMask & propagationMask; }
 
 		void Serialize(wiArchive& archive, wiECS::EntitySerializer& seri);
 	};
@@ -138,6 +141,9 @@ namespace wiScene
 			SHADERTYPE_WATER,
 			SHADERTYPE_CARTOON,
 			SHADERTYPE_UNLIT,
+			SHADERTYPE_PBR_CLOTH,
+			SHADERTYPE_PBR_CLEARCOAT,
+			SHADERTYPE_PBR_CLOTH_CLEARCOAT,
 			SHADERTYPE_COUNT
 		} shaderType = SHADERTYPE_PBR;
 
@@ -153,41 +159,64 @@ namespace wiScene
 		float roughness = 0.2f;
 		float reflectance = 0.02f;
 		float metalness = 0.0f;
-		float refractionIndex = 0.0f;
 		float normalMapStrength = 1.0f;
 		float parallaxOcclusionMapping = 0.0f;
 		float displacementMapping = 0.0f;
-
+		float refraction = 0.0f;
+		float transmission = 0.0f;
 		float alphaRef = 1.0f;
+
+		XMFLOAT4 sheenColor = XMFLOAT4(1, 1, 1, 1);
+		float sheenRoughness = 0;
+		float clearcoat = 0;
+		float clearcoatRoughness = 0;
+
 		wiGraphics::SHADING_RATE shadingRate = wiGraphics::SHADING_RATE_1X1;
 		
 		XMFLOAT2 texAnimDirection = XMFLOAT2(0, 0);
 		float texAnimFrameRate = 0.0f;
 		float texAnimElapsedTime = 0.0f;
 
-		std::string baseColorMapName;
-		std::string surfaceMapName;
-		std::string normalMapName;
-		std::string displacementMapName;
-		std::string emissiveMapName;
-		std::string occlusionMapName;
+		enum TEXTURESLOT
+		{
+			BASECOLORMAP,
+			NORMALMAP,
+			SURFACEMAP,
+			EMISSIVEMAP,
+			DISPLACEMENTMAP,
+			OCCLUSIONMAP,
+			TRANSMISSIONMAP,
+			SHEENCOLORMAP,
+			SHEENROUGHNESSMAP,
+			CLEARCOATMAP,
+			CLEARCOATROUGHNESSMAP,
+			CLEARCOATNORMALMAP,
 
-		uint32_t uvset_baseColorMap = 0;
-		uint32_t uvset_surfaceMap = 0;
-		uint32_t uvset_normalMap = 0;
-		uint32_t uvset_displacementMap = 0;
-		uint32_t uvset_emissiveMap = 0;
-		uint32_t uvset_occlusionMap = 0;
+			TEXTURESLOT_COUNT
+		};
+		struct TextureMap
+		{
+			std::string name;
+			uint32_t uvset = 0;
+			std::shared_ptr<wiResource> resource;
+			const wiGraphics::GPUResource* GetGPUResource() const
+			{
+				if (resource == nullptr)
+					return nullptr;
+				return resource->texture;
+			}
+			int GetUVSet() const
+			{
+				if (resource == nullptr)
+					return -1;
+				return (int)uvset;
+			}
+		};
+		TextureMap textures[TEXTURESLOT_COUNT];
 
 		int customShaderID = -1;
 
 		// Non-serialized attributes:
-		std::shared_ptr<wiResource> baseColorMap;
-		std::shared_ptr<wiResource> surfaceMap;
-		std::shared_ptr<wiResource> normalMap;
-		std::shared_ptr<wiResource> displacementMap;
-		std::shared_ptr<wiResource> emissiveMap;
-		std::shared_ptr<wiResource> occlusionMap;
 		wiGraphics::GPUBuffer constantBuffer;
 		uint32_t layerMask = ~0u;
 
@@ -198,13 +227,6 @@ namespace wiScene
 			userStencilRef = value & 0x0F;
 		}
 		uint32_t GetStencilRef() const;
-
-		const wiGraphics::Texture* GetBaseColorMap() const;
-		const wiGraphics::Texture* GetNormalMap() const;
-		const wiGraphics::Texture* GetSurfaceMap() const;
-		const wiGraphics::Texture* GetDisplacementMap() const;
-		const wiGraphics::Texture* GetEmissiveMap() const;
-		const wiGraphics::Texture* GetOcclusionMap() const;
 
 		inline float GetOpacity() const { return baseColor.w; }
 		inline float GetEmissiveStrength() const { return emissiveColor.w; }
@@ -236,7 +258,8 @@ namespace wiScene
 		inline void SetReflectance(float value) { SetDirty(); reflectance = value; }
 		inline void SetMetalness(float value) { SetDirty(); metalness = value; }
 		inline void SetEmissiveStrength(float value) { SetDirty(); emissiveColor.w = value; }
-		inline void SetRefractionIndex(float value) { SetDirty(); refractionIndex = value; }
+		inline void SetTransmissionAmount(float value) { SetDirty(); transmission = value; }
+		inline void SetRefractionAmount(float value) { SetDirty(); refraction = value; }
 		inline void SetNormalMapStrength(float value) { SetDirty(); normalMapStrength = value; }
 		inline void SetParallaxOcclusionMapping(float value) { SetDirty(); parallaxOcclusionMapping = value; }
 		inline void SetDisplacementMapping(float value) { SetDirty(); displacementMapping = value; }
@@ -253,17 +276,22 @@ namespace wiScene
 		inline void SetUseVertexColors(bool value) { SetDirty(); if (value) { _flags |= USE_VERTEXCOLORS; } else { _flags &= ~USE_VERTEXCOLORS; } }
 		inline void SetUseWind(bool value) { SetDirty(); if (value) { _flags |= USE_WIND; } else { _flags &= ~USE_WIND; } }
 		inline void SetUseSpecularGlossinessWorkflow(bool value) { SetDirty(); if (value) { _flags |= SPECULAR_GLOSSINESS_WORKFLOW; } else { _flags &= ~SPECULAR_GLOSSINESS_WORKFLOW; }  }
+		inline void SetSheenColor(const XMFLOAT3& value)
+		{
+			sheenColor = XMFLOAT4(value.x, value.y, value.z, sheenColor.w);
+			SetDirty();
+		}
+		inline void SetSheenRoughness(float value) { sheenRoughness = value; SetDirty(); }
+		inline void SetClearcoatFactor(float value) { clearcoat = value; SetDirty(); }
+		inline void SetClearcoatRoughness(float value) { clearcoatRoughness = value; SetDirty(); }
 		inline void SetCustomShaderID(int id) { customShaderID = id; }
 		inline void DisableCustomShader() { customShaderID = -1; }
-		inline void SetUVSet_BaseColorMap(uint32_t value) { uvset_baseColorMap = value; SetDirty(); }
-		inline void SetUVSet_NormalMap(uint32_t value) { uvset_normalMap = value; SetDirty(); }
-		inline void SetUVSet_SurfaceMap(uint32_t value) { uvset_surfaceMap = value; SetDirty(); }
-		inline void SetUVSet_DisplacementMap(uint32_t value) { uvset_displacementMap = value; SetDirty(); }
-		inline void SetUVSet_EmissiveMap(uint32_t value) { uvset_emissiveMap = value; SetDirty(); }
-		inline void SetUVSet_OcclusionMap(uint32_t value) { uvset_occlusionMap = value; SetDirty(); }
 
 		// The MaterialComponent will be written to ShaderMaterial (a struct that is optimized for GPU use)
 		void WriteShaderMaterial(ShaderMaterial* dest) const;
+
+		// Retrieve the array of textures from the material
+		void WriteTextures(const wiGraphics::GPUResource** dest, int count) const;
 
 		// Returns the bitwise OR of all the RENDERTYPE flags applicable to this material
 		uint32_t GetRenderTypes() const;
@@ -566,6 +594,7 @@ namespace wiScene
 		uint32_t cascadeMask = 0; // which shadow cascades to skip (0: skip none, 1: skip first, etc...)
 		uint32_t rendertypeMask = 0;
 		XMFLOAT4 color = XMFLOAT4(1, 1, 1, 1);
+		XMFLOAT4 emissiveColor = XMFLOAT4(1, 1, 1, 1);
 
 		uint32_t lightmapWidth = 0;
 		uint32_t lightmapHeight = 0;

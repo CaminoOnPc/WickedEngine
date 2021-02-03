@@ -75,9 +75,6 @@
     <None Include="$(MSBuildThisFileDirectory)oceanSurfaceHF.hlsli">
       <Filter>HF</Filter>
     </None>
-    <None Include="$(MSBuildThisFileDirectory)objectInputLayoutHF.hlsli">
-      <Filter>HF</Filter>
-    </None>
     <None Include="$(MSBuildThisFileDirectory)impostorHF.hlsli">
       <Filter>HF</Filter>
     </None>
@@ -88,9 +85,6 @@
       <Filter>HF</Filter>
     </None>
     <None Include="$(MSBuildThisFileDirectory)fxaa.hlsli">
-      <Filter>HF</Filter>
-    </None>
-    <None Include="$(MSBuildThisFileDirectory)envMapHF.hlsli">
       <Filter>HF</Filter>
     </None>
     <None Include="$(MSBuildThisFileDirectory)cylinder.hlsli">
@@ -130,6 +124,12 @@
       <Filter>HF</Filter>
     </None>
     <None Include="$(MSBuildThisFileDirectory)skyAtmosphere.hlsli">
+      <Filter>HF</Filter>
+    </None>
+    <None Include="$(MSBuildThisFileDirectory)rtshadowLIB.hlsl">
+      <Filter>LIB</Filter>
+    </None>
+    <None Include="$(MSBuildThisFileDirectory)objectHF_tessellation.hlsli">
       <Filter>HF</Filter>
     </None>
   </ItemGroup>
@@ -596,9 +596,6 @@
     <FxCompile Include="$(MSBuildThisFileDirectory)objectPS_voxelizer_terrain.hlsl">
       <Filter>PS</Filter>
     </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)objectPS_textureonly.hlsl">
-      <Filter>PS</Filter>
-    </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)objectPS_hologram.hlsl">
       <Filter>PS</Filter>
     </FxCompile>
@@ -609,9 +606,6 @@
       <Filter>PS</Filter>
     </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)objectPS_debug.hlsl">
-      <Filter>PS</Filter>
-    </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)objectPS_alphatestonly.hlsl">
       <Filter>PS</Filter>
     </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)lightVisualizerPS.hlsl">
@@ -626,13 +620,7 @@
     <FxCompile Include="$(MSBuildThisFileDirectory)impostorPS_simple.hlsl">
       <Filter>PS</Filter>
     </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)impostorPS_alphatestonly.hlsl">
-      <Filter>PS</Filter>
-    </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)hairparticlePS_simplest.hlsl">
-      <Filter>PS</Filter>
-    </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)hairparticlePS_alphatestonly.hlsl">
       <Filter>PS</Filter>
     </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)forceFieldVisualizerPS.hlsl">
@@ -731,9 +719,6 @@
     <FxCompile Include="$(MSBuildThisFileDirectory)objectVS_simple.hlsl">
       <Filter>VS</Filter>
     </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)objectVS_simple_tessellation.hlsl">
-      <Filter>VS</Filter>
-    </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)objectVS_voxelizer.hlsl">
       <Filter>VS</Filter>
     </FxCompile>
@@ -744,9 +729,6 @@
       <Filter>VS</Filter>
     </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)objectVS_debug.hlsl">
-      <Filter>VS</Filter>
-    </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)objectVS_positionstream.hlsl">
       <Filter>VS</Filter>
     </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)lensFlareVS.hlsl">
@@ -919,6 +901,81 @@
     </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)skyAtmosphere_multiScatteredLuminanceLutCS.hlsl">
       <Filter>CS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)cubeShadowVS_transparent.hlsl">
+      <Filter>VS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)cubeShadowVS_transparent_emulation.hlsl">
+      <Filter>VS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)cubeShadowGS_transparent_emulation.hlsl">
+      <Filter>GS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)upsample_bilateral_uint4CS.hlsl">
+      <Filter>CS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)rtshadow_denoise_temporalCS.hlsl">
+      <Filter>CS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)objectPS_prepass.hlsl">
+      <Filter>PS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)hairparticlePS_prepass.hlsl">
+      <Filter>PS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)objectPS_prepass_alphatest.hlsl">
+      <Filter>PS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)skyPS_velocity.hlsl">
+      <Filter>PS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)objectVS_prepass_alphatest.hlsl">
+      <Filter>VS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)impostorPS_prepass.hlsl">
+      <Filter>PS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)objectVS_prepass.hlsl">
+      <Filter>VS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)objectVS_prepass_tessellation.hlsl">
+      <Filter>VS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)objectVS_prepass_alphatest_tessellation.hlsl">
+      <Filter>VS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)objectHS_prepass.hlsl">
+      <Filter>HS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)objectHS_prepass_alphatest.hlsl">
+      <Filter>HS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)objectDS_prepass.hlsl">
+      <Filter>DS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)objectDS_prepass_alphatest.hlsl">
+      <Filter>DS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)screenspaceshadowCS.hlsl">
+      <Filter>CS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)objectPS_cloth.hlsl">
+      <Filter>PS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)objectPS_transparent_cloth.hlsl">
+      <Filter>PS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)objectPS_clearcoat.hlsl">
+      <Filter>PS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)objectPS_transparent_clearcoat.hlsl">
+      <Filter>PS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)objectPS_cloth_clearcoat.hlsl">
+      <Filter>PS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)objectPS_transparent_cloth_clearcoat.hlsl">
+      <Filter>PS</Filter>
     </FxCompile>
   </ItemGroup>
 </Project>

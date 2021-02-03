@@ -99,7 +99,7 @@ void main(uint3 DTid : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex)
 		if (roulette < refractChance)
 		{
 			// Refraction
-			const float3 R = refract(ray.direction, N, 1 - material.refractionIndex);
+			const float3 R = refract(ray.direction, N, 1 - material.refraction);
 			ray.direction = lerp(R, SampleHemisphere_cos(R, seed, uv), alphaRoughness);
 			ray.energy *= lerp(baseColor.rgb, 1, refractChance);
 
@@ -109,7 +109,7 @@ void main(uint3 DTid : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex)
 		else
 		{
 			// Calculate chances of reflection types:
-			const float3 F = F_Fresnel(surface.f0, saturate(dot(-ray.direction, N)));
+			const float3 F = F_Schlick(surface.f0, saturate(dot(-ray.direction, N)));
 			const float specChance = dot(F, 0.333);
 
 			roulette = rand(seed, uv);

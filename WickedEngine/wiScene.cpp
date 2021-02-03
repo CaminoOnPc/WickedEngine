@@ -224,54 +224,6 @@ namespace wiScene
 		XMStoreFloat3(&scale_local, S);
 	}
 
-	const Texture* MaterialComponent::GetBaseColorMap() const
-	{
-		if (baseColorMap != nullptr)
-		{
-			return baseColorMap->texture;
-		}
-		return wiTextureHelper::getWhite();
-	}
-	const Texture* MaterialComponent::GetNormalMap() const
-	{
-		if (normalMap != nullptr)
-		{
-			return normalMap->texture;
-		}
-		return nullptr;
-	}
-	const Texture* MaterialComponent::GetSurfaceMap() const
-	{
-		if (surfaceMap != nullptr)
-		{
-			return surfaceMap->texture;
-		}
-		return wiTextureHelper::getWhite();
-	}
-	const Texture* MaterialComponent::GetDisplacementMap() const
-	{
-		if (displacementMap != nullptr)
-		{
-			return displacementMap->texture;
-		}
-		return wiTextureHelper::getWhite();
-	}
-	const Texture* MaterialComponent::GetEmissiveMap() const
-	{
-		if (emissiveMap != nullptr)
-		{
-			return emissiveMap->texture;
-		}
-		return wiTextureHelper::getWhite();
-	}
-	const Texture* MaterialComponent::GetOcclusionMap() const
-	{
-		if (occlusionMap != nullptr)
-		{
-			return occlusionMap->texture;
-		}
-		return wiTextureHelper::getWhite();
-	}
 	void MaterialComponent::WriteShaderMaterial(ShaderMaterial* dest) const
 	{
 		dest->baseColor = baseColor;
@@ -281,8 +233,8 @@ namespace wiScene
 		dest->roughness = roughness;
 		dest->reflectance = reflectance;
 		dest->metalness = metalness;
-		dest->refractionIndex = refractionIndex;
-		dest->normalMapStrength = (normalMap == nullptr ? 0 : normalMapStrength);
+		dest->refraction = refraction;
+		dest->normalMapStrength = (textures[NORMALMAP].resource == nullptr ? 0 : normalMapStrength);
 		dest->parallaxOcclusionMapping = parallaxOcclusionMapping;
 		dest->displacementMapping = displacementMapping;
 		dest->subsurfaceScattering = subsurfaceScattering;
@@ -293,14 +245,25 @@ namespace wiScene
 		dest->subsurfaceScattering_inv.y = 1.0f / ((1 + dest->subsurfaceScattering.y) * (1 + dest->subsurfaceScattering.y));
 		dest->subsurfaceScattering_inv.z = 1.0f / ((1 + dest->subsurfaceScattering.z) * (1 + dest->subsurfaceScattering.z));
 		dest->subsurfaceScattering_inv.w = 1.0f / ((1 + dest->subsurfaceScattering.w) * (1 + dest->subsurfaceScattering.w));
-		dest->uvset_baseColorMap = baseColorMap == nullptr ? -1 : (int)uvset_baseColorMap;
-		dest->uvset_surfaceMap = surfaceMap == nullptr ? -1 : (int)uvset_surfaceMap;
-		dest->uvset_normalMap = normalMap == nullptr ? -1 : (int)uvset_normalMap;
-		dest->uvset_displacementMap = displacementMap == nullptr ? -1 : (int)uvset_displacementMap;
-		dest->uvset_emissiveMap = emissiveMap == nullptr ? -1 : (int)uvset_emissiveMap;
-		dest->uvset_occlusionMap = occlusionMap == nullptr ? -1 : (int)uvset_occlusionMap;
+		dest->uvset_baseColorMap = textures[BASECOLORMAP].GetUVSet();
+		dest->uvset_surfaceMap = textures[SURFACEMAP].GetUVSet();
+		dest->uvset_normalMap = textures[NORMALMAP].GetUVSet();
+		dest->uvset_displacementMap = textures[DISPLACEMENTMAP].GetUVSet();
+		dest->uvset_emissiveMap = textures[EMISSIVEMAP].GetUVSet();
+		dest->uvset_occlusionMap = textures[OCCLUSIONMAP].GetUVSet();
+		dest->uvset_transmissionMap = textures[TRANSMISSIONMAP].GetUVSet();
+		dest->uvset_sheenColorMap = textures[SHEENCOLORMAP].GetUVSet();
+		dest->uvset_sheenRoughnessMap = textures[SHEENROUGHNESSMAP].GetUVSet();
+		dest->uvset_clearcoatMap = textures[CLEARCOATMAP].GetUVSet();
+		dest->uvset_clearcoatRoughnessMap = textures[CLEARCOATROUGHNESSMAP].GetUVSet();
+		dest->uvset_clearcoatNormalMap = textures[CLEARCOATNORMALMAP].GetUVSet();
+		dest->sheenColor = sheenColor;
+		dest->sheenRoughness = sheenRoughness;
+		dest->clearcoat = clearcoat;
+		dest->clearcoatRoughness = clearcoatRoughness;
 		dest->alphaTest = 1 - alphaRef + 1.0f / 256.0f; // 256 so that it is just about smaller than 1 unorm unit (1.0/255.0)
 		dest->layerMask = layerMask;
+		dest->transmission = transmission;
 		dest->options = 0;
 		if (IsUsingVertexColors())
 		{
@@ -328,6 +291,14 @@ namespace wiScene
 		dest->emissiveMapAtlasMulAdd = XMFLOAT4(0, 0, 0, 0);
 		dest->normalMapAtlasMulAdd = XMFLOAT4(0, 0, 0, 0);
 	}
+	void MaterialComponent::WriteTextures(const wiGraphics::GPUResource** dest, int count) const
+	{
+		count = std::min(count, (int)TEXTURESLOT_COUNT);
+		for (int i = 0; i < count; ++i)
+		{
+			dest[i] = textures[i].GetGPUResource();
+		}
+	}
 	uint32_t MaterialComponent::GetRenderTypes() const
 	{
 		if (IsCustomShader() && customShaderID < (int)wiRenderer::GetCustomShaders().size())
@@ -339,6 +310,10 @@ namespace wiScene
 		{
 			return RENDERTYPE_TRANSPARENT | RENDERTYPE_WATER;
 		}
+		if (transmission > 0)
+		{
+			return RENDERTYPE_TRANSPARENT;
+		}
 		if (userBlendMode == BLENDMODE_OPAQUE)
 		{
 			return RENDERTYPE_OPAQUE;
@@ -347,31 +322,13 @@ namespace wiScene
 	}
 	void MaterialComponent::CreateRenderData(const std::string& content_dir)
 	{
-		if (!baseColorMapName.empty())
+		for (auto& x : textures)
 		{
-			baseColorMap = wiResourceManager::Load(content_dir + baseColorMapName);
+			if (!x.name.empty())
+			{
+				x.resource = wiResourceManager::Load(content_dir + x.name);
+			}
 		}
-		if (!surfaceMapName.empty())
-		{
-			surfaceMap = wiResourceManager::Load(content_dir + surfaceMapName);
-		}
-		if (!normalMapName.empty())
-		{
-			normalMap = wiResourceManager::Load(content_dir + normalMapName);
-		}
-		if (!displacementMapName.empty())
-		{
-			displacementMap = wiResourceManager::Load(content_dir + displacementMapName);
-		}
-		if (!emissiveMapName.empty())
-		{
-			emissiveMap = wiResourceManager::Load(content_dir + emissiveMapName);
-		}
-		if (!occlusionMapName.empty())
-		{
-			occlusionMap = wiResourceManager::Load(content_dir + occlusionMapName);
-		}
-
 
 		ShaderMaterial shadermat;
 		WriteShaderMaterial(&shadermat);
@@ -1733,17 +1690,9 @@ namespace wiScene
 		decals.Create(entity);
 
 		MaterialComponent& material = materials.Create(entity);
-
-		if (!textureName.empty())
-		{
-			material.baseColorMapName = textureName;
-			material.baseColorMap = wiResourceManager::Load(material.baseColorMapName);
-		}
-		if (!normalMapName.empty())
-		{
-			material.normalMapName = normalMapName;
-			material.normalMap = wiResourceManager::Load(material.normalMapName);
-		}
+		material.textures[MaterialComponent::BASECOLORMAP].name = textureName;
+		material.textures[MaterialComponent::NORMALMAP].name = normalMapName;
+		material.CreateRenderData();
 
 		return entity;
 	}
@@ -1891,8 +1840,7 @@ namespace wiScene
 		{
 			layer_child = &layers.Create(entity);
 		}
-		// Save the initial layermask of the child so that it can be restored if detached:
-		parentcomponent.layerMask_bind = layer_child->GetLayerMask();
+		layer_child->propagationMask = layer_parent->GetLayerMask();
 	}
 	void Scene::Component_Detach(Entity entity)
 	{
@@ -1909,7 +1857,7 @@ namespace wiScene
 			LayerComponent* layer = layers.GetComponent(entity);
 			if (layer != nullptr)
 			{
-				layer->layerMask = parent->layerMask_bind;
+				layer->propagationMask = ~0;
 			}
 
 			hierarchy.Remove_KeepSorted(entity);
@@ -2274,7 +2222,7 @@ namespace wiScene
 			LayerComponent* layer_parent = layers.GetComponent(parentcomponent.parentID);
 			if (layer_child != nullptr && layer_parent != nullptr)
 			{
-				layer_child->layerMask &= layer_parent->GetLayerMask();
+				layer_child->propagationMask = layer_parent->GetLayerMask();
 			}
 
 		}
@@ -2546,31 +2494,31 @@ namespace wiScene
 							&descriptorTables[DESCRIPTORTABLE_SUBSETS_TEXTURES],
 							0,
 							global_geometryIndex * MATERIAL_TEXTURE_SLOT_DESCRIPTOR_COUNT + MATERIAL_TEXTURE_SLOT_DESCRIPTOR_BASECOLOR,
-							material->baseColorMap ? material->baseColorMap->texture : nullptr
+							material->textures[MaterialComponent::BASECOLORMAP].GetGPUResource()
 						);
 						device->WriteDescriptor(
 							&descriptorTables[DESCRIPTORTABLE_SUBSETS_TEXTURES],
 							0,
 							global_geometryIndex * MATERIAL_TEXTURE_SLOT_DESCRIPTOR_COUNT + MATERIAL_TEXTURE_SLOT_DESCRIPTOR_NORMAL,
-							material->normalMap ? material->normalMap->texture : nullptr
+							material->textures[MaterialComponent::NORMALMAP].GetGPUResource()
 						);
 						device->WriteDescriptor(
 							&descriptorTables[DESCRIPTORTABLE_SUBSETS_TEXTURES],
 							0,
 							global_geometryIndex * MATERIAL_TEXTURE_SLOT_DESCRIPTOR_COUNT + MATERIAL_TEXTURE_SLOT_DESCRIPTOR_SURFACE,
-							material->surfaceMap ? material->surfaceMap->texture : nullptr
+							material->textures[MaterialComponent::SURFACEMAP].GetGPUResource()
 						);
 						device->WriteDescriptor(
 							&descriptorTables[DESCRIPTORTABLE_SUBSETS_TEXTURES],
 							0,
 							global_geometryIndex * MATERIAL_TEXTURE_SLOT_DESCRIPTOR_COUNT + MATERIAL_TEXTURE_SLOT_DESCRIPTOR_OCCLUSION,
-							material->occlusionMap ? material->occlusionMap->texture : nullptr
+							material->textures[MaterialComponent::OCCLUSIONMAP].GetGPUResource()
 						);
 						device->WriteDescriptor(
 							&descriptorTables[DESCRIPTORTABLE_SUBSETS_TEXTURES],
 							0,
 							global_geometryIndex * MATERIAL_TEXTURE_SLOT_DESCRIPTOR_COUNT + MATERIAL_TEXTURE_SLOT_DESCRIPTOR_EMISSIVE,
-							material->emissiveMap ? material->emissiveMap->texture : nullptr
+							material->textures[MaterialComponent::EMISSIVEMAP].GetGPUResource()
 						);
 						device->WriteDescriptor(
 							&descriptorTables[DESCRIPTORTABLE_SUBSETS_INDEXBUFFER],
@@ -2908,8 +2856,8 @@ namespace wiScene
 			const MaterialComponent& material = *materials.GetComponent(entity);
 			decal.color = material.baseColor;
 			decal.emissive = material.GetEmissiveStrength();
-			decal.texture = material.baseColorMap;
-			decal.normal = material.normalMap;
+			decal.texture = material.textures[MaterialComponent::BASECOLORMAP].resource;
+			decal.normal = material.textures[MaterialComponent::NORMALMAP].resource;
 		});
 	}
 	void Scene::RunProbeUpdateSystem(wiJobSystem::context& ctx)

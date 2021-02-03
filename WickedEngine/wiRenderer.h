@@ -37,7 +37,7 @@ namespace wiRenderer
 	const wiGraphics::GPUBuffer* GetConstantBuffer(CBTYPES id);
 	const wiGraphics::Texture* GetTexture(TEXTYPES id);
 
-	void ModifySampler(const wiGraphics::SamplerDesc& desc, int slot);
+	void ModifyObjectSampler(const wiGraphics::SamplerDesc& desc);
 
 
 	void Initialize();
@@ -198,7 +198,9 @@ namespace wiRenderer
 	void RefreshAtmosphericScatteringTextures(wiGraphics::CommandList cmd);
 	// Draw skydome centered to camera.
 	void DrawSky(const wiScene::Scene& scene, wiGraphics::CommandList cmd);
-	// A black skydome will be draw with only the sun being visible on it
+	// Draw sky velocity buffer
+	void DrawSkyVelocity(wiGraphics::CommandList cmd);
+	// Draw shadow maps for each visible light that has associated shadow maps
 	void DrawSun(wiGraphics::CommandList cmd);
 	// Draw shadow maps for each visible light that has associated shadow maps
 	void DrawShadowmaps(
@@ -316,6 +318,7 @@ namespace wiRenderer
 		const wiGraphics::Texture& depthbuffer,
 		const wiGraphics::Texture& lineardepth,
 		const wiGraphics::Texture& depth_history,
+		const wiGraphics::Texture gbuffer[GBUFFER_COUNT],
 		const wiGraphics::Texture& output,
 		wiGraphics::CommandList cmd,
 		float range = 1.0f,
@@ -325,6 +328,7 @@ namespace wiRenderer
 	void Postprocess_RTReflection(
 		const wiScene::Scene& scene,
 		const wiGraphics::Texture& depthbuffer,
+		const wiGraphics::Texture& depth_history,
 		const wiGraphics::Texture gbuffer[GBUFFER_COUNT],
 		const wiGraphics::Texture& output,
 		wiGraphics::CommandList cmd,
@@ -334,9 +338,29 @@ namespace wiRenderer
 		const wiGraphics::Texture& input,
 		const wiGraphics::Texture& depthbuffer,
 		const wiGraphics::Texture& lineardepth,
+		const wiGraphics::Texture& depth_history,
 		const wiGraphics::Texture gbuffer[GBUFFER_COUNT],
 		const wiGraphics::Texture& output,
 		wiGraphics::CommandList cmd
+	);
+	void Postprocess_RTShadow(
+		const wiScene::Scene& scene,
+		const wiGraphics::Texture& depthbuffer,
+		const wiGraphics::Texture& lineardepth,
+		const wiGraphics::Texture& depth_history,
+		const wiGraphics::GPUBuffer& entityTiles_Opaque,
+		const wiGraphics::Texture gbuffer[GBUFFER_COUNT],
+		const wiGraphics::Texture& output,
+		wiGraphics::CommandList cmd
+	);
+	void Postprocess_ScreenSpaceShadow(
+		const wiGraphics::Texture& depthbuffer,
+		const wiGraphics::Texture& lineardepth,
+		const wiGraphics::GPUBuffer& entityTiles_Opaque,
+		const wiGraphics::Texture& output,
+		wiGraphics::CommandList cmd,
+		float range = 1,
+		uint32_t samplecount = 16
 	);
 	void Postprocess_LightShafts(
 		const wiGraphics::Texture& input,
@@ -363,8 +387,8 @@ namespace wiRenderer
 	);
 	void Postprocess_MotionBlur(
 		const wiGraphics::Texture& input,
-		const wiGraphics::Texture& velocity,
 		const wiGraphics::Texture& lineardepth,
+		const wiGraphics::Texture gbuffer[GBUFFER_COUNT],
 		const wiGraphics::Texture& output,
 		wiGraphics::CommandList cmd,
 		float strength = 100.0f
@@ -380,7 +404,6 @@ namespace wiRenderer
 	void Postprocess_VolumetricClouds(
 		const wiGraphics::Texture& input,
 		const wiGraphics::Texture& output,
-		const wiGraphics::Texture& lightshaftoutput,
 		const wiGraphics::Texture& lineardepth,
 		const wiGraphics::Texture& depthbuffer,
 		wiGraphics::CommandList cmd
@@ -393,15 +416,15 @@ namespace wiRenderer
 	void Postprocess_TemporalAA(
 		const wiGraphics::Texture& input_current,
 		const wiGraphics::Texture& input_history,
-		const wiGraphics::Texture& velocity,
 		const wiGraphics::Texture& lineardepth,
 		const wiGraphics::Texture& depth_history,
+		const wiGraphics::Texture gbuffer[GBUFFER_COUNT],
 		const wiGraphics::Texture& output,
 		wiGraphics::CommandList cmd
 	);
-	void Postprocess_Lineardepth(
-		const wiGraphics::Texture& input,
-		const wiGraphics::Texture& output,
+	void Postprocess_DepthPyramid(
+		const wiGraphics::Texture& depthbuffer,
+		const wiGraphics::Texture& lineardepth,
 		wiGraphics::CommandList cmd
 	);
 	void Postprocess_Sharpen(
@@ -604,6 +627,8 @@ namespace wiRenderer
 	bool IsDisableAlbedoMaps();
 	void SetRaytracedShadowsSampleCount(uint32_t value);
 	uint32_t GetRaytracedShadowsSampleCount();
+	void SetScreenSpaceShadowsEnabled(bool value);
+	bool GetScreenSpaceShadowsEnabled();
 
 	const wiGraphics::Texture* GetGlobalLightmap();
 

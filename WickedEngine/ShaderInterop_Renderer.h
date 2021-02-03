@@ -21,7 +21,7 @@ struct ShaderMaterial
 	float		roughness;
 	float		reflectance;
 	float		metalness;
-	float		refractionIndex;
+	float		refraction;
 
 	float		normalMapStrength;
 	float		parallaxOcclusionMapping;
@@ -36,7 +36,23 @@ struct ShaderMaterial
 	int			uvset_displacementMap;
 	int			uvset_emissiveMap;
 	int			uvset_occlusionMap;
+	int			uvset_transmissionMap;
+
+	float2		padding1;
+	float		transmission;
 	uint		options;
+
+	int			uvset_sheenColorMap;
+	int			uvset_sheenRoughnessMap;
+	int			uvset_clearcoatMap;
+	int			uvset_clearcoatRoughnessMap;
+
+	int			uvset_clearcoatNormalMap;
+	float		sheenRoughness;
+	float		clearcoat;
+	float		clearcoatRoughness;
+
+	float4		sheenColor;
 
 	float4		baseColorAtlasMulAdd;
 	float4		surfaceMapAtlasMulAdd;
@@ -230,6 +246,7 @@ static const uint OPTION_BIT_SIMPLE_SKY = 1 << 5;
 static const uint OPTION_BIT_REALISTIC_SKY = 1 << 6;
 static const uint OPTION_BIT_RAYTRACED_SHADOWS = 1 << 7;
 static const uint OPTION_BIT_DISABLE_ALBEDO_MAPS = 1 << 8;
+static const uint OPTION_BIT_SHADOW_MASK = 1 << 9;
 
 // ---------- Common Constant buffers: -----------------
 
@@ -342,6 +359,13 @@ CBUFFER(CameraCB, CBSLOT_RENDERER_CAMERA)
 	float4x4	g_xCamera_InvP;			// Inverse Projection
 	float4x4	g_xCamera_InvVP;		// Inverse View-Projection
 
+	// Frustum planes:
+	//	0 : near
+	//	1 : far
+	//	2 : left
+	//	3 : right
+	//	4 : top
+	//	5 : bottom
 	float4		g_xCamera_FrustumPlanes[6];
 
 	float2		g_xFrame_TemporalAAJitter;
@@ -423,7 +447,7 @@ CBUFFER(CubemapRenderCB, CBSLOT_RENDERER_CUBEMAPRENDER)
 
 CBUFFER(TessellationCB, CBSLOT_RENDERER_TESSELLATION)
 {
-	float4 g_f4TessFactors;
+	float4 xTessellationFactors;
 };
 
 

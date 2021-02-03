@@ -1,18 +1,10 @@
-#include "globals.hlsli"
+#define OBJECTSHADER_LAYOUT_POS_TEX
+#define OBJECTSHADER_USE_COLOR
 #include "objectHF.hlsli"
 
-struct VertextoPixel
-{
-	float4 pos				: SV_POSITION;
-	float4 color			: COLOR;
-	float4 uvsets			: UVSETS;
-};
-
 [earlydepthstencil]
-float4 main(VertextoPixel input) : SV_TARGET
+float4 main(PixelInput input) : SV_TARGET
 {
-	float2 pixel = input.pos.xy;
-
 	float4 color;
 	[branch]
 	if (g_xMaterial.uvset_baseColorMap >= 0)
@@ -29,7 +21,23 @@ float4 main(VertextoPixel input) : SV_TARGET
 
 	float opacity = color.a;
 
+	[branch]
+	if (g_xMaterial.transmission > 0)
+	{
+		float transmission = g_xMaterial.transmission;
+		[branch]
+		if (g_xMaterial.uvset_transmissionMap >= 0)
+		{
+			const float2 UV_transmissionMap = g_xMaterial.uvset_transmissionMap == 0 ? input.uvsets.xy : input.uvsets.zw;
+			float transmissionMap = texture_transmissionmap.Sample(sampler_objectshader, UV_transmissionMap);
+			transmission *= transmissionMap;
+		}
+		opacity *= 1 - transmission;
+	}
+
 	color.rgb *= 1 - opacity; // if fully opaque, then black (not let through any light)
+
+	color.a = input.pos.z; // secondary depth
 
 	return color;
 }

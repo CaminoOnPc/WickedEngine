@@ -1134,6 +1134,9 @@
     <ClInclude Include="$(MSBuildThisFileDirectory)wiBlueNoise.h">
       <Filter>ENGINE\Helpers</Filter>
     </ClInclude>
+    <ClInclude Include="$(MSBuildThisFileDirectory)Utility\volk.h">
+      <Filter>UTILITY</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="$(MSBuildThisFileDirectory)LUA\lapi.c">
@@ -1879,6 +1882,9 @@
     </ClCompile>
     <ClCompile Include="$(MSBuildThisFileDirectory)Utility\spirv_reflect.c">
       <Filter>UTILITY</Filter>
+    </ClCompile>
+    <ClCompile Include="$(MSBuildThisFileDirectory)wiBlueNoise.cpp">
+      <Filter>ENGINE\Helpers</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>

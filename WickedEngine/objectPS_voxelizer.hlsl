@@ -1,4 +1,5 @@
 #define DISABLE_SOFT_SHADOWMAP
+#define DISABLE_VOXELGI
 #include "objectHF.hlsli"
 #include "voxelHF.hlsli"
 
@@ -313,7 +314,7 @@ void main(PSInput input)
 			}
 		}
 
-		color.rgb *= lighting.direct.diffuse;
+		color.rgb *= lighting.direct.diffuse + GetAmbient(N);
 		
 		color.rgb += emissiveColor.rgb * emissiveColor.a;
 

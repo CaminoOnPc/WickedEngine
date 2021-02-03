@@ -6,8 +6,6 @@
 #include "ResourceMapping.h"
 #include "wiBackLog.h"
 
-#pragma comment(lib,"d3d11.lib")
-#pragma comment(lib,"Dxgi.lib")
 #pragma comment(lib,"dxguid.lib")
 
 #include <sstream>
@@ -26,6 +24,14 @@ namespace wiGraphics
 
 namespace DX11_Internal
 {
+
+#ifdef PLATFORM_UWP
+	// UWP will use static link + /DELAYLOAD linker feature for the dlls (optionally)
+#pragma comment(lib,"d3d11.lib")
+#else
+	static PFN_D3D11_CREATE_DEVICE D3D11CreateDevice = nullptr;
+#endif // PLATFORM_UWP
+
 	// Engine -> Native converters
 
 	constexpr uint32_t _ParseBindFlags(uint32_t value)
@@ -1103,6 +1109,7 @@ namespace DX11_Internal
 	struct VertexShader_DX11
 	{
 		ComPtr<ID3D11VertexShader> resource;
+		std::vector<uint8_t> shadercode;
 	};
 	struct HullShader_DX11
 	{
@@ -1182,30 +1189,70 @@ void GraphicsDevice_DX11::pso_validate(CommandList cmd)
 	{
 		deviceContexts[cmd]->VSSetShader(vs, nullptr, 0);
 		prev_vs[cmd] = vs;
+
+		if (desc.vs != nullptr)
+		{
+			for (auto& x : desc.vs->auto_samplers)
+			{
+				BindSampler(VS, &x.sampler, x.slot, cmd);
+			}
+		}
 	}
 	ID3D11PixelShader* ps = desc.ps == nullptr ? nullptr : static_cast<PixelShader_DX11*>(desc.ps->internal_state.get())->resource.Get();
 	if (ps != prev_ps[cmd])
 	{
 		deviceContexts[cmd]->PSSetShader(ps, nullptr, 0);
 		prev_ps[cmd] = ps;
+
+		if (desc.ps != nullptr)
+		{
+			for (auto& x : desc.ps->auto_samplers)
+			{
+				BindSampler(PS, &x.sampler, x.slot, cmd);
+			}
+		}
 	}
 	ID3D11HullShader* hs = desc.hs == nullptr ? nullptr : static_cast<HullShader_DX11*>(desc.hs->internal_state.get())->resource.Get();
 	if (hs != prev_hs[cmd])
 	{
 		deviceContexts[cmd]->HSSetShader(hs, nullptr, 0);
 		prev_hs[cmd] = hs;
+
+		if (desc.hs != nullptr)
+		{
+			for (auto& x : desc.hs->auto_samplers)
+			{
+				BindSampler(HS, &x.sampler, x.slot, cmd);
+			}
+		}
 	}
 	ID3D11DomainShader* ds = desc.ds == nullptr ? nullptr : static_cast<DomainShader_DX11*>(desc.ds->internal_state.get())->resource.Get();
 	if (ds != prev_ds[cmd])
 	{
 		deviceContexts[cmd]->DSSetShader(ds, nullptr, 0);
 		prev_ds[cmd] = ds;
+
+		if (desc.ds != nullptr)
+		{
+			for (auto& x : desc.ds->auto_samplers)
+			{
+				BindSampler(DS, &x.sampler, x.slot, cmd);
+			}
+		}
 	}
 	ID3D11GeometryShader* gs = desc.gs == nullptr ? nullptr : static_cast<GeometryShader_DX11*>(desc.gs->internal_state.get())->resource.Get();
 	if (gs != prev_gs[cmd])
 	{
 		deviceContexts[cmd]->GSSetShader(gs, nullptr, 0);
 		prev_gs[cmd] = gs;
+
+		if (desc.gs != nullptr)
+		{
+			for (auto& x : desc.gs->auto_samplers)
+			{
+				BindSampler(GS, &x.sampler, x.slot, cmd);
+			}
+		}
 	}
 
 	ID3D11BlendState* bs = desc.bs == nullptr ? nullptr : internal_state->bs.Get();
@@ -1294,6 +1341,14 @@ GraphicsDevice_DX11::GraphicsDevice_DX11(wiPlatform::window_type window, bool fu
 	RESOLUTIONWIDTH = int(window->Bounds.Width * dpiscale);
 	RESOLUTIONHEIGHT = int(window->Bounds.Height * dpiscale);
 #endif
+
+
+#ifndef PLATFORM_UWP
+	HMODULE dx11 = LoadLibraryEx(L"d3d11.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+
+	D3D11CreateDevice = (PFN_D3D11_CREATE_DEVICE)GetProcAddress(dx11, "D3D11CreateDevice");
+	assert(D3D11CreateDevice != nullptr);
+#endif // PLATFORM_UWP
 
 	HRESULT hr = E_FAIL;
 
@@ -1630,8 +1685,6 @@ bool GraphicsDevice_DX11::CreateTexture(const TextureDesc* pDesc, const Subresou
 }
 bool GraphicsDevice_DX11::CreateShader(SHADERSTAGE stage, const void *pShaderBytecode, size_t BytecodeLength, Shader *pShader)
 {
-	pShader->code.resize(BytecodeLength);
-	std::memcpy(pShader->code.data(), pShaderBytecode, BytecodeLength);
 	pShader->stage = stage;
 
 	HRESULT hr = E_FAIL;
@@ -1642,6 +1695,8 @@ bool GraphicsDevice_DX11::CreateShader(SHADERSTAGE stage, const void *pShaderByt
 	{
 		auto internal_state = std::make_shared<VertexShader_DX11>();
 		pShader->internal_state = internal_state;
+		internal_state->shadercode.resize(BytecodeLength);
+		std::memcpy(internal_state->shadercode.data(), pShaderBytecode, BytecodeLength);
 		hr = device->CreateVertexShader(pShaderBytecode, BytecodeLength, nullptr, &internal_state->resource);
 	}
 	break;
@@ -1776,7 +1831,8 @@ bool GraphicsDevice_DX11::CreatePipelineState(const PipelineStateDesc* pDesc, Pi
 		}
 
 		assert(pDesc->vs != nullptr);
-		hr = device->CreateInputLayout(desc.data(), (UINT)desc.size(), pDesc->vs->code.data(), pDesc->vs->code.size(), &internal_state->il);
+		auto vs_internal = static_cast<VertexShader_DX11*>(pDesc->vs->internal_state.get());
+		hr = device->CreateInputLayout(desc.data(), (UINT)desc.size(), vs_internal->shadercode.data(), vs_internal->shadercode.size(), &internal_state->il);
 		assert(SUCCEEDED(hr));
 	}
 
@@ -2501,6 +2557,11 @@ bool GraphicsDevice_DX11::QueryRead(const GPUQuery* query, GPUQueryResult* resul
 	return hr != S_FALSE;
 }
 
+void GraphicsDevice_DX11::SetCommonSampler(const StaticSampler* sam)
+{
+	common_samplers.push_back(*sam);
+}
+
 void GraphicsDevice_DX11::SetName(GPUResource* pResource, const char* name)
 {
 	auto internal_state = to_internal(pResource);
@@ -2551,6 +2612,14 @@ CommandList GraphicsDevice_DX11::BeginCommandList()
 
 	BindPipelineState(nullptr, cmd);
 	BindComputeShader(nullptr, cmd);
+
+	for (int stage = 0; stage < SHADERSTAGE_COUNT; ++stage)
+	{
+		for (auto& sam : common_samplers)
+		{
+			BindSampler((SHADERSTAGE)stage, &sam.sampler, sam.slot, cmd);
+		}
+	}
 
 	D3D11_VIEWPORT vp = {};
 	vp.Width = (float)RESOLUTIONWIDTH;
@@ -2816,7 +2885,6 @@ void GraphicsDevice_DX11::BindResource(SHADERSTAGE stage, const GPUResource* res
 			deviceContexts[cmd]->CSSetShaderResources(slot, 1, &SRV);
 			break;
 		default:
-			assert(0);
 			break;
 		}
 	}
@@ -2851,7 +2919,6 @@ void GraphicsDevice_DX11::BindResources(SHADERSTAGE stage, const GPUResource *co
 		deviceContexts[cmd]->CSSetShaderResources(slot, count, srvs);
 		break;
 	default:
-		assert(0);
 		break;
 	}
 }
@@ -2953,11 +3020,7 @@ void GraphicsDevice_DX11::BindSampler(SHADERSTAGE stage, const Sampler* sampler,
 		case wiGraphics::CS:
 			deviceContexts[cmd]->CSSetSamplers(slot, 1, &SAM);
 			break;
-		case MS:
-		case AS:
-			break;
 		default:
-			assert(0);
 			break;
 		}
 	}
@@ -2985,11 +3048,7 @@ void GraphicsDevice_DX11::BindConstantBuffer(SHADERSTAGE stage, const GPUBuffer*
 	case wiGraphics::CS:
 		deviceContexts[cmd]->CSSetConstantBuffers(slot, 1, &res);
 		break;
-	case MS:
-	case AS:
-		break;
 	default:
-		assert(0);
 		break;
 	}
 }
@@ -3034,6 +3093,14 @@ void GraphicsDevice_DX11::BindComputeShader(const Shader* cs, CommandList cmd)
 	{
 		deviceContexts[cmd]->CSSetShader(_cs, nullptr, 0);
 		prev_cs[cmd] = _cs;
+
+		if (cs != nullptr)
+		{
+			for (auto& x : cs->auto_samplers)
+			{
+				BindSampler(CS, &x.sampler, x.slot, cmd);
+			}
+		}
 	}
 }
 void GraphicsDevice_DX11::Draw(uint32_t vertexCount, uint32_t startVertexLocation, CommandList cmd) 

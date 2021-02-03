@@ -1,13 +1,13 @@
 #pragma once
+#include "CommonInclude.h"
+#include "wiPlatform.h"
 
 #if __has_include("d3d11_3.h")
 #define WICKEDENGINE_BUILD_DX11
 #endif // HAS DX11
 
 #ifdef WICKEDENGINE_BUILD_DX11
-#include "CommonInclude.h"
 #include "wiGraphicsDevice.h"
-#include "wiPlatform.h"
 
 #include <d3d11_3.h>
 #include <DXGI1_3.h>
@@ -20,7 +20,7 @@ namespace wiGraphics
 
 	class GraphicsDevice_DX11 : public GraphicsDevice
 	{
-	private:
+	protected:
 		D3D_DRIVER_TYPE driverType;
 		D3D_FEATURE_LEVEL featureLevel;
 		Microsoft::WRL::ComPtr<ID3D11Device> device;
@@ -74,6 +74,8 @@ namespace wiGraphics
 
 		std::atomic<CommandList> cmd_count{ 0 };
 
+		std::vector<StaticSampler> common_samplers;
+
 		struct EmptyResourceHandle {}; // only care about control-block
 		std::shared_ptr<EmptyResourceHandle> emptyresource;
 
@@ -94,6 +96,8 @@ namespace wiGraphics
 		void Map(const GPUResource* resource, Mapping* mapping) override;
 		void Unmap(const GPUResource* resource) override;
 		bool QueryRead(const GPUQuery* query, GPUQueryResult* result) override;
+
+		void SetCommonSampler(const StaticSampler* sam) override;
 
 		void SetName(GPUResource* pResource, const char* name) override;
 
