@@ -2,8 +2,6 @@
 #include "wiImageParams_BindLua.h"
 #include "SpriteAnim_BindLua.h"
 
-using namespace std;
-
 const char wiSprite_BindLua::className[] = "Sprite";
 
 Luna<wiSprite_BindLua>::FunctionType wiSprite_BindLua::methods[] = {
@@ -24,14 +22,16 @@ wiSprite_BindLua::wiSprite_BindLua(const wiSprite& sprite) :sprite(sprite)
 
 wiSprite_BindLua::wiSprite_BindLua(lua_State *L)
 {
-	string name = "", mask = "";
+	std::string name = "", mask = "";
 	int argc = wiLua::SGetArgCount(L);
 	if (argc > 0)
 	{
 		name = wiLua::SGetString(L, 1);
+		name = wiLua::GetScriptPath() + name;
 		if (argc > 1)
 		{
 			mask = wiLua::SGetString(L, 2);
+			mask = wiLua::GetScriptPath() + mask;
 		}
 	}
 	sprite = wiSprite(name, mask);

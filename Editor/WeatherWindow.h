@@ -25,9 +25,11 @@ public:
 	wiSlider windDirectionSlider;
 	wiSlider windWaveSizeSlider;
 	wiSlider windRandomnessSlider;
+	wiSlider skyExposureSlider;
 	wiCheckBox simpleskyCheckBox;
 	wiCheckBox realisticskyCheckBox;
 	wiButton skyButton;
+	wiButton colorgradingButton;
 
 	// ocean params:
 	wiCheckBox ocean_enabledCheckBox;
@@ -43,6 +45,11 @@ public:
 
 	wiComboBox colorComboBox;
 	wiColorPicker colorPicker;
+
+	// volumetric clouds:
+	wiCheckBox volumetricCloudsCheckBox;
+	wiSlider coverageAmountSlider;
+	wiSlider coverageMinimumSlider;
 
 	wiButton preset0Button;
 	wiButton preset1Button;

@@ -3,6 +3,10 @@
 #include "wiArchive.h"
 #include "wiRandom.h"
 #include "wiHelper.h"
+#include "wiBackLog.h"
+
+#include <chrono>
+#include <string>
 
 using namespace wiECS;
 
@@ -205,8 +209,22 @@ namespace wiScene
 				archive >> textures[CLEARCOATNORMALMAP].uvset;
 			}
 
+			if (archive.GetVersion() >= 68)
+			{
+				archive >> textures[SPECULARMAP].name;
+				archive >> textures[SPECULARMAP].uvset;
+			}
+
+			for (auto& x : textures)
+			{
+				if (!x.name.empty())
+				{
+					x.name = dir + x.name;
+				}
+			}
+
 			wiJobSystem::Execute(seri.ctx, [&](wiJobArgs args) {
-				CreateRenderData(dir);
+				CreateRenderData();
 			});
 		}
 		else
@@ -241,17 +259,9 @@ namespace wiScene
 			archive << texAnimFrameRate;
 			archive << texAnimElapsedTime;
 
-			// If detecting an absolute path in textures, remove it and convert to relative:
-			if(!dir.empty())
+			for (auto& x : textures)
 			{
-				for (auto& x : textures)
-				{
-					size_t found = x.name.rfind(dir);
-					if (found != std::string::npos)
-					{
-						x.name = x.name.substr(found + dir.length());
-					}
-				}
+				wiHelper::MakePathRelative(dir, x.name);
 			}
 
 			archive << textures[BASECOLORMAP].name;
@@ -323,6 +333,12 @@ namespace wiScene
 				archive << textures[CLEARCOATMAP].uvset;
 				archive << textures[CLEARCOATROUGHNESSMAP].uvset;
 				archive << textures[CLEARCOATNORMALMAP].uvset;
+			}
+
+			if (archive.GetVersion() >= 68)
+			{
+				archive << textures[SPECULARMAP].name;
+				archive << textures[SPECULARMAP].uvset;
 			}
 		}
 	}
@@ -697,7 +713,8 @@ namespace wiScene
 				{
 					if (!lensFlareNames[i].empty())
 					{
-						lensFlareRimTextures[i] = wiResourceManager::Load(dir + lensFlareNames[i]);
+						lensFlareNames[i] = dir + lensFlareNames[i];
+						lensFlareRimTextures[i] = wiResourceManager::Load(lensFlareNames[i], wiResourceManager::IMPORT_RETAIN_FILEDATA);
 					}
 				}
 			});
@@ -727,11 +744,7 @@ namespace wiScene
 			{
 				for (size_t i = 0; i < lensFlareNames.size(); ++i)
 				{
-					size_t found = lensFlareNames[i].rfind(dir);
-					if (found != std::string::npos)
-					{
-						lensFlareNames[i] = lensFlareNames[i].substr(found + dir.length());
-					}
+					wiHelper::MakePathRelative(dir, lensFlareNames[i]);
 				}
 			}
 			archive << lensFlareNames;
@@ -748,6 +761,13 @@ namespace wiScene
 			archive >> zFarP;
 			archive >> fov;
 
+			if (archive.GetVersion() >= 65)
+			{
+				archive >> focal_length;
+				archive >> aperture_size;
+				archive >> aperture_shape;
+			}
+
 			SetDirty();
 		}
 		else
@@ -758,6 +778,13 @@ namespace wiScene
 			archive << zNearP;
 			archive << zFarP;
 			archive << fov;
+
+			if (archive.GetVersion() >= 65)
+			{
+				archive << focal_length;
+				archive << aperture_size;
+				archive << aperture_shape;
+			}
 		}
 	}
 	void EnvironmentProbeComponent::Serialize(wiArchive& archive, EntitySerializer& seri)
@@ -928,7 +955,18 @@ namespace wiScene
 			archive >> oceanParameters.wind_speed;
 			archive >> oceanParameters.wind_dependency;
 			archive >> oceanParameters.choppy_scale;
-			archive >> oceanParameters.waterColor;
+			if (archive.GetVersion() < 67)
+			{
+				XMFLOAT3 waterColor;
+				archive >> waterColor;
+				oceanParameters.waterColor.x = waterColor.x;
+				oceanParameters.waterColor.y = waterColor.y;
+				oceanParameters.waterColor.z = waterColor.z;
+			}
+			else
+			{
+				archive >> oceanParameters.waterColor;
+			}
 			archive >> oceanParameters.waterHeight;
 			archive >> oceanParameters.surfaceDetail;
 			archive >> oceanParameters.surfaceDisplacementTolerance;
@@ -938,12 +976,102 @@ namespace wiScene
 				archive >> skyMapName;
 				if (!skyMapName.empty())
 				{
-					skyMap = wiResourceManager::Load(dir + skyMapName);
+					skyMapName = dir + skyMapName;
+					skyMap = wiResourceManager::Load(skyMapName, wiResourceManager::IMPORT_RETAIN_FILEDATA);
 				}
 			}
 			if (archive.GetVersion() >= 40)
 			{
 				archive >> windSpeed;
+			}
+			if (archive.GetVersion() >= 62)
+			{
+				archive >> colorGradingMapName;
+				if (!colorGradingMapName.empty())
+				{
+					colorGradingMapName = dir + colorGradingMapName;
+					colorGradingMap = wiResourceManager::Load(colorGradingMapName, wiResourceManager::IMPORT_COLORGRADINGLUT | wiResourceManager::IMPORT_RETAIN_FILEDATA);
+				}
+			}
+
+			if (archive.GetVersion() >= 66)
+			{
+				archive >> skyExposure;
+
+				archive >> atmosphereParameters.bottomRadius;
+				archive >> atmosphereParameters.topRadius;
+				archive >> atmosphereParameters.planetCenter;
+				archive >> atmosphereParameters.rayleighDensityExpScale;
+				archive >> atmosphereParameters.rayleighScattering;
+				archive >> atmosphereParameters.mieDensityExpScale;
+				archive >> atmosphereParameters.mieScattering;
+				archive >> atmosphereParameters.mieExtinction;
+				archive >> atmosphereParameters.mieAbsorption;
+				archive >> atmosphereParameters.absorptionDensity0LayerWidth;
+				archive >> atmosphereParameters.absorptionDensity0ConstantTerm;
+				archive >> atmosphereParameters.absorptionDensity0LinearTerm;
+				archive >> atmosphereParameters.absorptionDensity1ConstantTerm;
+				archive >> atmosphereParameters.absorptionDensity1LinearTerm;
+				archive >> atmosphereParameters.absorptionExtinction;
+				archive >> atmosphereParameters.groundAlbedo;
+			}
+
+			if (archive.GetVersion() >= 70)
+			{
+				archive >> volumetricCloudParameters.Albedo;
+				archive >> volumetricCloudParameters.CloudAmbientGroundMultiplier;
+				archive >> volumetricCloudParameters.ExtinctionCoefficient;
+				archive >> volumetricCloudParameters.BeerPowder;
+				archive >> volumetricCloudParameters.BeerPowderPower;
+				archive >> volumetricCloudParameters.PhaseG;
+				archive >> volumetricCloudParameters.PhaseG2;
+				archive >> volumetricCloudParameters.PhaseBlend;
+				archive >> volumetricCloudParameters.MultiScatteringScattering;
+				archive >> volumetricCloudParameters.MultiScatteringExtinction;
+				archive >> volumetricCloudParameters.MultiScatteringEccentricity;
+				archive >> volumetricCloudParameters.ShadowStepLength;
+				archive >> volumetricCloudParameters.HorizonBlendAmount;
+				archive >> volumetricCloudParameters.HorizonBlendPower;
+				archive >> volumetricCloudParameters.WeatherDensityAmount;
+				archive >> volumetricCloudParameters.CloudStartHeight;
+				archive >> volumetricCloudParameters.CloudThickness;
+				archive >> volumetricCloudParameters.SkewAlongWindDirection;
+				archive >> volumetricCloudParameters.TotalNoiseScale;
+				archive >> volumetricCloudParameters.DetailScale;
+				archive >> volumetricCloudParameters.WeatherScale;
+				archive >> volumetricCloudParameters.CurlScale;
+				archive >> volumetricCloudParameters.ShapeNoiseHeightGradientAmount;
+				archive >> volumetricCloudParameters.ShapeNoiseMultiplier;
+				archive >> volumetricCloudParameters.ShapeNoiseMinMax;
+				archive >> volumetricCloudParameters.ShapeNoisePower;
+				archive >> volumetricCloudParameters.DetailNoiseModifier;
+				archive >> volumetricCloudParameters.DetailNoiseHeightFraction;
+				archive >> volumetricCloudParameters.CurlNoiseModifier;
+				archive >> volumetricCloudParameters.CoverageAmount;
+				archive >> volumetricCloudParameters.CoverageMinimum;
+				archive >> volumetricCloudParameters.TypeAmount;
+				archive >> volumetricCloudParameters.TypeOverall;
+				archive >> volumetricCloudParameters.AnvilAmount;
+				archive >> volumetricCloudParameters.AnvilOverhangHeight;
+				archive >> volumetricCloudParameters.AnimationMultiplier;
+				archive >> volumetricCloudParameters.WindSpeed;
+				archive >> volumetricCloudParameters.WindAngle;
+				archive >> volumetricCloudParameters.WindUpAmount;
+				archive >> volumetricCloudParameters.CoverageWindSpeed;
+				archive >> volumetricCloudParameters.CoverageWindAngle;
+				archive >> volumetricCloudParameters.CloudGradientSmall;
+				archive >> volumetricCloudParameters.CloudGradientMedium;
+				archive >> volumetricCloudParameters.CloudGradientLarge;
+				archive >> volumetricCloudParameters.MaxStepCount;
+				archive >> volumetricCloudParameters.MaxMarchingDistance;
+				archive >> volumetricCloudParameters.InverseDistanceStepCount;
+				archive >> volumetricCloudParameters.RenderDistance;
+				archive >> volumetricCloudParameters.LODDistance;
+				archive >> volumetricCloudParameters.LODMin;
+				archive >> volumetricCloudParameters.BigStepMarch;
+				archive >> volumetricCloudParameters.TransmittanceThreshold;
+				archive >> volumetricCloudParameters.ShadowSampleCount;
+				archive >> volumetricCloudParameters.GroundContributionSampleCount;
 			}
 
 		}
@@ -978,22 +1106,100 @@ namespace wiScene
 			archive << oceanParameters.surfaceDetail;
 			archive << oceanParameters.surfaceDisplacementTolerance;
 
+			wiHelper::MakePathRelative(dir, skyMapName);
+			wiHelper::MakePathRelative(dir, colorGradingMapName);
+
 			if (archive.GetVersion() >= 32)
 			{
-				// If detecting an absolute path in textures, remove it and convert to relative:
-				if (!dir.empty())
-				{
-					size_t found = skyMapName.rfind(dir);
-					if (found != std::string::npos)
-					{
-						skyMapName = skyMapName.substr(found + dir.length());
-					}
-				}
 				archive << skyMapName;
 			}
 			if (archive.GetVersion() >= 40)
 			{
 				archive << windSpeed;
+			}
+			if (archive.GetVersion() >= 62)
+			{
+				archive << colorGradingMapName;
+			}
+
+			if (archive.GetVersion() >= 66)
+			{
+				archive << skyExposure;
+
+				archive << atmosphereParameters.bottomRadius;
+				archive << atmosphereParameters.topRadius;
+				archive << atmosphereParameters.planetCenter;
+				archive << atmosphereParameters.rayleighDensityExpScale;
+				archive << atmosphereParameters.rayleighScattering;
+				archive << atmosphereParameters.mieDensityExpScale;
+				archive << atmosphereParameters.mieScattering;
+				archive << atmosphereParameters.mieExtinction;
+				archive << atmosphereParameters.mieAbsorption;
+				archive << atmosphereParameters.absorptionDensity0LayerWidth;
+				archive << atmosphereParameters.absorptionDensity0ConstantTerm;
+				archive << atmosphereParameters.absorptionDensity0LinearTerm;
+				archive << atmosphereParameters.absorptionDensity1ConstantTerm;
+				archive << atmosphereParameters.absorptionDensity1LinearTerm;
+				archive << atmosphereParameters.absorptionExtinction;
+				archive << atmosphereParameters.groundAlbedo;
+			}
+
+			if (archive.GetVersion() >= 70)
+			{
+				archive << volumetricCloudParameters.Albedo;
+				archive << volumetricCloudParameters.CloudAmbientGroundMultiplier;
+				archive << volumetricCloudParameters.ExtinctionCoefficient;
+				archive << volumetricCloudParameters.BeerPowder;
+				archive << volumetricCloudParameters.BeerPowderPower;
+				archive << volumetricCloudParameters.PhaseG;
+				archive << volumetricCloudParameters.PhaseG2;
+				archive << volumetricCloudParameters.PhaseBlend;
+				archive << volumetricCloudParameters.MultiScatteringScattering;
+				archive << volumetricCloudParameters.MultiScatteringExtinction;
+				archive << volumetricCloudParameters.MultiScatteringEccentricity;
+				archive << volumetricCloudParameters.ShadowStepLength;
+				archive << volumetricCloudParameters.HorizonBlendAmount;
+				archive << volumetricCloudParameters.HorizonBlendPower;
+				archive << volumetricCloudParameters.WeatherDensityAmount;
+				archive << volumetricCloudParameters.CloudStartHeight;
+				archive << volumetricCloudParameters.CloudThickness;
+				archive << volumetricCloudParameters.SkewAlongWindDirection;
+				archive << volumetricCloudParameters.TotalNoiseScale;
+				archive << volumetricCloudParameters.DetailScale;
+				archive << volumetricCloudParameters.WeatherScale;
+				archive << volumetricCloudParameters.CurlScale;
+				archive << volumetricCloudParameters.ShapeNoiseHeightGradientAmount;
+				archive << volumetricCloudParameters.ShapeNoiseMultiplier;
+				archive << volumetricCloudParameters.ShapeNoiseMinMax;
+				archive << volumetricCloudParameters.ShapeNoisePower;
+				archive << volumetricCloudParameters.DetailNoiseModifier;
+				archive << volumetricCloudParameters.DetailNoiseHeightFraction;
+				archive << volumetricCloudParameters.CurlNoiseModifier;
+				archive << volumetricCloudParameters.CoverageAmount;
+				archive << volumetricCloudParameters.CoverageMinimum;
+				archive << volumetricCloudParameters.TypeAmount;
+				archive << volumetricCloudParameters.TypeOverall;
+				archive << volumetricCloudParameters.AnvilAmount;
+				archive << volumetricCloudParameters.AnvilOverhangHeight;
+				archive << volumetricCloudParameters.AnimationMultiplier;
+				archive << volumetricCloudParameters.WindSpeed;
+				archive << volumetricCloudParameters.WindAngle;
+				archive << volumetricCloudParameters.WindUpAmount;
+				archive << volumetricCloudParameters.CoverageWindSpeed;
+				archive << volumetricCloudParameters.CoverageWindAngle;
+				archive << volumetricCloudParameters.CloudGradientSmall;
+				archive << volumetricCloudParameters.CloudGradientMedium;
+				archive << volumetricCloudParameters.CloudGradientLarge;
+				archive << volumetricCloudParameters.MaxStepCount;
+				archive << volumetricCloudParameters.MaxMarchingDistance;
+				archive << volumetricCloudParameters.InverseDistanceStepCount;
+				archive << volumetricCloudParameters.RenderDistance;
+				archive << volumetricCloudParameters.LODDistance;
+				archive << volumetricCloudParameters.LODMin;
+				archive << volumetricCloudParameters.BigStepMarch;
+				archive << volumetricCloudParameters.TransmittanceThreshold;
+				archive << volumetricCloudParameters.ShadowSampleCount;
+				archive << volumetricCloudParameters.GroundContributionSampleCount;
 			}
 
 		}
@@ -1012,22 +1218,15 @@ namespace wiScene
 			wiJobSystem::Execute(seri.ctx, [&](wiJobArgs args) {
 				if (!filename.empty())
 				{
-					soundResource = wiResourceManager::Load(dir + filename);
-					wiAudio::CreateSoundInstance(soundResource->sound, &soundinstance);
+					filename = dir + filename;
+					soundResource = wiResourceManager::Load(filename, wiResourceManager::IMPORT_RETAIN_FILEDATA);
+					wiAudio::CreateSoundInstance(&soundResource->sound, &soundinstance);
 				}
 			});
 		}
 		else
 		{
-			// If detecting an absolute path in textures, remove it and convert to relative:
-			if(!dir.empty())
-			{
-				size_t found = filename.rfind(dir);
-				if (found != std::string::npos)
-				{
-					filename = filename.substr(found + dir.length());
-				}
-			}
+			wiHelper::MakePathRelative(dir, filename);
 
 			archive << _flags;
 			archive << filename;
@@ -1074,6 +1273,8 @@ namespace wiScene
 
 	void Scene::Serialize(wiArchive& archive)
 	{
+		std::chrono::high_resolution_clock::time_point t1 = std::chrono::high_resolution_clock::now();
+
 		if (archive.IsReadMode())
 		{
 			uint32_t reserved;
@@ -1083,6 +1284,13 @@ namespace wiScene
 		{
 			uint32_t reserved = 0;
 			archive << reserved;
+		}
+
+		// Keeping this alive to keep serialized resources alive until entity serialization ends:
+		wiResourceManager::ResourceSerializer resource_seri;
+		if (archive.GetVersion() >= 63)
+		{
+			wiResourceManager::Serialize(archive, resource_seri);
 		}
 
 		// With this we will ensure that serialized entities are unique and persistent across the scene:
@@ -1130,6 +1338,10 @@ namespace wiScene
 			animation_datas.Serialize(archive, seri);
 		}
 
+		std::chrono::high_resolution_clock::time_point t2 = std::chrono::high_resolution_clock::now();
+		std::chrono::duration<double> time_span = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1);
+		double sec = time_span.count();
+		wiBackLog::post((std::string("Scene serialize took ") + std::to_string(sec) + std::string(" sec")).c_str());
 	}
 
 	Entity Scene::Entity_Serialize(wiArchive& archive, Entity entity)

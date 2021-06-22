@@ -4,16 +4,15 @@
 #include "wiMath.h"
 #include "wiIntersect.h"
 #include "wiRandom.h"
-#include "ResourceMapping.h"
+#include "shaders/ResourceMapping.h"
 #include "wiArchive.h"
-#include "ShaderInterop.h"
+#include "shaders/ShaderInterop.h"
 #include "wiTextureHelper.h"
 #include "wiScene.h"
-#include "ShaderInterop_HairParticle.h"
+#include "shaders/ShaderInterop_HairParticle.h"
 #include "wiBackLog.h"
 #include "wiEvent.h"
 
-using namespace std;
 using namespace wiGraphics;
 
 namespace wiScene
@@ -22,7 +21,7 @@ namespace wiScene
 static Shader vs;
 static Shader ps_prepass;
 static Shader ps;
-static Shader ps_simplest;
+static Shader ps_simple;
 static Shader cs_simulate;
 static Shader cs_finishUpdate;
 static DepthStencilState dss_default, dss_equal;
@@ -165,7 +164,7 @@ void wiHairParticle::UpdateGPU(const MeshComponent& mesh, const MaterialComponen
 	TextureDesc desc;
 	if (material.textures[MaterialComponent::BASECOLORMAP].resource != nullptr)
 	{
-		desc = material.textures[MaterialComponent::BASECOLORMAP].resource->texture->GetDesc();
+		desc = material.textures[MaterialComponent::BASECOLORMAP].resource->texture.GetDesc();
 	}
 
 	HairParticleCB hcb;
@@ -189,6 +188,7 @@ void wiHairParticle::UpdateGPU(const MeshComponent& mesh, const MaterialComponen
 	hcb.xHairFrameStart = frameStart;
 	hcb.xHairTexMul = float2(1.0f / (float)hcb.xHairFramesXY.x, 1.0f / (float)hcb.xHairFramesXY.y);
 	hcb.xHairAspect = (float)std::max(1u, desc.Width) / (float)std::max(1u, desc.Height);
+	hcb.xHairLayerMask = layerMask;
 	device->UpdateBuffer(&cb, &hcb, cmd);
 
 	// Simulate:
@@ -210,6 +210,13 @@ void wiHairParticle::UpdateGPU(const MeshComponent& mesh, const MaterialComponen
 			&vertexBuffer_length
 		};
 		device->BindResources(CS, res, TEXSLOT_ONDEMAND0, arraysize(res), cmd);
+
+		{
+			GPUBarrier barriers[] = {
+				GPUBarrier::Buffer(&mesh.indexBuffer, BUFFER_STATE_INDEX_BUFFER, BUFFER_STATE_SHADER_RESOURCE),
+			};
+			device->Barrier(barriers, arraysize(barriers), cmd);
+		}
 
 		device->Dispatch(hcb.xHairNumDispatchGroups, 1, 1, cmd);
 
@@ -234,11 +241,21 @@ void wiHairParticle::UpdateGPU(const MeshComponent& mesh, const MaterialComponen
 		device->Dispatch(1, 1, 1, cmd);
 
 		GPUBarrier barriers[] = {
-			GPUBarrier::Memory()
+			GPUBarrier::Memory(),
+			GPUBarrier::Buffer(&indirectBuffer, BUFFER_STATE_UNORDERED_ACCESS, BUFFER_STATE_INDIRECT_ARGUMENT),
+			GPUBarrier::Buffer(&culledIndexBuffer, BUFFER_STATE_UNORDERED_ACCESS, BUFFER_STATE_SHADER_RESOURCE),
+			GPUBarrier::Buffer(&particleBuffer, BUFFER_STATE_UNORDERED_ACCESS, BUFFER_STATE_SHADER_RESOURCE),
 		};
 		device->Barrier(barriers, arraysize(barriers), cmd);
 
 		device->UnbindUAVs(0, arraysize(uavs), cmd);
+	}
+
+	{
+		GPUBarrier barriers[] = {
+			GPUBarrier::Buffer(&mesh.indexBuffer, BUFFER_STATE_SHADER_RESOURCE, BUFFER_STATE_INDEX_BUFFER),
+		};
+		device->Barrier(barriers, arraysize(barriers), cmd);
 	}
 
 	device->EventEnd(cmd);
@@ -362,7 +379,7 @@ namespace wiHairParticle_Internal
 
 		wiRenderer::LoadShader(VS, vs, "hairparticleVS.cso");
 
-		wiRenderer::LoadShader(PS, ps_simplest, "hairparticlePS_simplest.cso");
+		wiRenderer::LoadShader(PS, ps_simple, "hairparticlePS_simple.cso");
 		wiRenderer::LoadShader(PS, ps_prepass, "hairparticlePS_prepass.cso");
 		wiRenderer::LoadShader(PS, ps, "hairparticlePS.cso");
 
@@ -400,10 +417,11 @@ namespace wiHairParticle_Internal
 		{
 			PipelineStateDesc desc;
 			desc.vs = &vs;
-			desc.ps = &ps_simplest;
+			desc.ps = &ps_simple;
 			desc.bs = &bs;
 			desc.rs = &wirers;
 			desc.dss = &dss_default;
+			desc.pt = TRIANGLESTRIP;
 			device->CreatePipelineState(&desc, &PSO_wire);
 		}
 
@@ -469,6 +487,7 @@ void wiHairParticle::Initialize()
 
 	dsd.DepthWriteMask = DEPTH_WRITE_MASK_ZERO;
 	dsd.DepthFunc = COMPARISON_EQUAL;
+	dsd.StencilEnable = false;
 	dss_equal = dsd;
 
 

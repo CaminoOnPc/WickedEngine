@@ -4,14 +4,13 @@
 
 #include <thread>
 
-using namespace std;
 using namespace wiGraphics;
 
 
 void PostprocessWindow::Create(EditorComponent* editor)
 {
 	wiWindow::Create("PostProcess Window");
-	SetSize(XMFLOAT2(420, 520));
+	SetSize(XMFLOAT2(420, 500));
 
 	float x = 150;
 	float y = 10;
@@ -51,16 +50,6 @@ void PostprocessWindow::Create(EditorComponent* editor)
 	});
 	AddWidget(&lightShaftsCheckBox);
 
-	volumetricCloudsCheckBox.Create("Volumetric clouds: ");
-	volumetricCloudsCheckBox.SetTooltip("Enable volumetric cloud rendering.");
-	volumetricCloudsCheckBox.SetSize(XMFLOAT2(hei, hei));
-	volumetricCloudsCheckBox.SetPos(XMFLOAT2(x, y += step));
-	volumetricCloudsCheckBox.SetCheck(editor->renderPath->getVolumetricCloudsEnabled());
-	volumetricCloudsCheckBox.OnClick([=](wiEventArgs args) {
-		editor->renderPath->setVolumetricCloudsEnabled(args.bValue);
-		});
-	AddWidget(&volumetricCloudsCheckBox);
-
 	aoComboBox.Create("AO: ");
 	aoComboBox.SetTooltip("Choose Ambient Occlusion type. RTAO is only available if hardware supports ray tracing");
 	aoComboBox.SetScriptTip("RenderPath3D::SetAO(int value)");
@@ -70,7 +59,7 @@ void PostprocessWindow::Create(EditorComponent* editor)
 	aoComboBox.AddItem("SSAO");
 	aoComboBox.AddItem("HBAO");
 	aoComboBox.AddItem("MSAO");
-	if (wiRenderer::GetDevice()->CheckCapability(GRAPHICSDEVICE_CAPABILITY_RAYTRACING))
+	if (wiRenderer::GetDevice()->CheckCapability(GRAPHICSDEVICE_CAPABILITY_RAYTRACING_INLINE))
 	{
 		aoComboBox.AddItem("RTAO");
 	}
@@ -89,8 +78,7 @@ void PostprocessWindow::Create(EditorComponent* editor)
 		case RenderPath3D::AO_RTAO:
 			aoRangeSlider.SetEnabled(true); 
 			aoRangeSlider.SetValue(10.0f);
-			aoSampleCountSlider.SetEnabled(true); 
-			aoSampleCountSlider.SetValue(2.0f);
+			aoSampleCountSlider.SetEnabled(false);
 			break;
 		default:
 			aoRangeSlider.SetEnabled(false);
@@ -124,7 +112,7 @@ void PostprocessWindow::Create(EditorComponent* editor)
 	AddWidget(&aoRangeSlider);
 
 	aoSampleCountSlider.Create(1, 16, 9, 15, "Sample Count: ");
-	aoSampleCountSlider.SetTooltip("Set AO ray count. Only for SSAO and RTAO");
+	aoSampleCountSlider.SetTooltip("Set AO ray count. Only for SSAO");
 	aoSampleCountSlider.SetSize(XMFLOAT2(100, hei));
 	aoSampleCountSlider.SetPos(XMFLOAT2(x + 100, y += step));
 	aoSampleCountSlider.SetValue((float)editor->renderPath->getAOPower());
@@ -154,7 +142,7 @@ void PostprocessWindow::Create(EditorComponent* editor)
 		editor->renderPath->setRaytracedReflectionsEnabled(args.bValue);
 		});
 	AddWidget(&raytracedReflectionsCheckBox);
-	raytracedReflectionsCheckBox.SetEnabled(wiRenderer::GetDevice()->CheckCapability(GRAPHICSDEVICE_CAPABILITY_RAYTRACING));
+	raytracedReflectionsCheckBox.SetEnabled(wiRenderer::GetDevice()->CheckCapability(GRAPHICSDEVICE_CAPABILITY_RAYTRACING_PIPELINE) && wiRenderer::GetDevice()->CheckCapability(GRAPHICSDEVICE_CAPABILITY_RAYTRACING_GEOMETRYINDEX));
 
 	screenSpaceShadowsCheckBox.Create("SS Shadows: ");
 	screenSpaceShadowsCheckBox.SetTooltip("Enable screen space contact shadows. This can add small shadows details to shadow maps in screen space.");
@@ -196,6 +184,26 @@ void PostprocessWindow::Create(EditorComponent* editor)
 	});
 	AddWidget(&eyeAdaptionCheckBox);
 
+	eyeAdaptionKeySlider.Create(0.01f, 0.5f, 0.1f, 10000, "Key: ");
+	eyeAdaptionKeySlider.SetTooltip("Set the key value for eye adaption.");
+	eyeAdaptionKeySlider.SetSize(XMFLOAT2(100, hei));
+	eyeAdaptionKeySlider.SetPos(XMFLOAT2(x + 100, y));
+	eyeAdaptionKeySlider.SetValue(editor->renderPath->getEyeAdaptionKey());
+	eyeAdaptionKeySlider.OnSlide([=](wiEventArgs args) {
+		editor->renderPath->setEyeAdaptionKey(args.fValue);
+		});
+	AddWidget(&eyeAdaptionKeySlider);
+
+	eyeAdaptionRateSlider.Create(0.01f, 4, 0.5f, 10000, "Rate: ");
+	eyeAdaptionRateSlider.SetTooltip("Set the eye adaption rate (speed of adjustment)");
+	eyeAdaptionRateSlider.SetSize(XMFLOAT2(100, hei));
+	eyeAdaptionRateSlider.SetPos(XMFLOAT2(x + 100, y += step));
+	eyeAdaptionRateSlider.SetValue(editor->renderPath->getEyeAdaptionRate());
+	eyeAdaptionRateSlider.OnSlide([=](wiEventArgs args) {
+		editor->renderPath->setEyeAdaptionRate(args.fValue);
+		});
+	AddWidget(&eyeAdaptionRateSlider);
+
 	motionBlurCheckBox.Create("MotionBlur: ");
 	motionBlurCheckBox.SetTooltip("Enable motion blur for camera movement and animated meshes.");
 	motionBlurCheckBox.SetScriptTip("RenderPath3D::SetMotionBlurEnabled(bool value)");
@@ -219,7 +227,7 @@ void PostprocessWindow::Create(EditorComponent* editor)
 	AddWidget(&motionBlurStrengthSlider);
 
 	depthOfFieldCheckBox.Create("DepthOfField: ");
-	depthOfFieldCheckBox.SetTooltip("Enable Depth of field effect. Additional focus and strength setup required.");
+	depthOfFieldCheckBox.SetTooltip("Enable Depth of field effect. Requires additional camera setup: focal length and aperture size.");
 	depthOfFieldCheckBox.SetScriptTip("RenderPath3D::SetDepthOfFieldEnabled(bool value)");
 	depthOfFieldCheckBox.SetSize(XMFLOAT2(hei, hei));
 	depthOfFieldCheckBox.SetPos(XMFLOAT2(x, y += step));
@@ -229,38 +237,16 @@ void PostprocessWindow::Create(EditorComponent* editor)
 	});
 	AddWidget(&depthOfFieldCheckBox);
 
-	depthOfFieldFocusSlider.Create(1.0f, 100, 10, 10000, "Focus: ");
-	depthOfFieldFocusSlider.SetTooltip("Set the focus distance from the camera. The picture will be sharper near the focus, and blurrier further from it.");
-	depthOfFieldFocusSlider.SetScriptTip("RenderPath3D::SetDepthOfFieldFocus(float value)");
-	depthOfFieldFocusSlider.SetSize(XMFLOAT2(100, hei));
-	depthOfFieldFocusSlider.SetPos(XMFLOAT2(x + 100, y));
-	depthOfFieldFocusSlider.SetValue(editor->renderPath->getDepthOfFieldFocus());
-	depthOfFieldFocusSlider.OnSlide([=](wiEventArgs args) {
-		editor->renderPath->setDepthOfFieldFocus(args.fValue);
-	});
-	AddWidget(&depthOfFieldFocusSlider);
-
-	depthOfFieldScaleSlider.Create(1.0f, 20, 100, 1000, "Scale: ");
-	depthOfFieldScaleSlider.SetTooltip("Set depth of field scale/falloff.");
+	depthOfFieldScaleSlider.Create(1.0f, 20, 100, 1000, "Strength: ");
+	depthOfFieldScaleSlider.SetTooltip("Set depth of field strength. This is used to scale the Camera's ApertureSize setting");
 	depthOfFieldScaleSlider.SetScriptTip("RenderPath3D::SetDepthOfFieldStrength(float value)");
 	depthOfFieldScaleSlider.SetSize(XMFLOAT2(100, hei));
-	depthOfFieldScaleSlider.SetPos(XMFLOAT2(x + 100, y += step));
+	depthOfFieldScaleSlider.SetPos(XMFLOAT2(x + 100, y));
 	depthOfFieldScaleSlider.SetValue(editor->renderPath->getDepthOfFieldStrength());
 	depthOfFieldScaleSlider.OnSlide([=](wiEventArgs args) {
 		editor->renderPath->setDepthOfFieldStrength(args.fValue);
 	});
 	AddWidget(&depthOfFieldScaleSlider);
-
-	depthOfFieldAspectSlider.Create(0.01f, 2, 1, 1000, "Aspect: ");
-	depthOfFieldAspectSlider.SetTooltip("Set depth of field bokeh aspect ratio (width/height).");
-	depthOfFieldAspectSlider.SetScriptTip("RenderPath3D::SetDepthOfFieldAspect(float value)");
-	depthOfFieldAspectSlider.SetSize(XMFLOAT2(100, hei));
-	depthOfFieldAspectSlider.SetPos(XMFLOAT2(x + 100, y += step));
-	depthOfFieldAspectSlider.SetValue(editor->renderPath->getDepthOfFieldAspect());
-	depthOfFieldAspectSlider.OnSlide([=](wiEventArgs args) {
-		editor->renderPath->setDepthOfFieldAspect(args.fValue);
-		});
-	AddWidget(&depthOfFieldAspectSlider);
 
 	bloomCheckBox.Create("Bloom: ");
 	bloomCheckBox.SetTooltip("Enable bloom. The effect adds color bleeding to the brightest parts of the scene.");
@@ -295,8 +281,7 @@ void PostprocessWindow::Create(EditorComponent* editor)
 	AddWidget(&fxaaCheckBox);
 
 	colorGradingCheckBox.Create("Color Grading: ");
-	colorGradingCheckBox.SetTooltip("Enable color grading of the final render. An additional lookup texture must be set for it to take effect.");
-	colorGradingCheckBox.SetScriptTip("RenderPath3D::SetColorGradingEnabled(bool value)");
+	colorGradingCheckBox.SetTooltip("Enable color grading of the final render. An additional lookup texture must be set in the Weather!");
 	colorGradingCheckBox.SetSize(XMFLOAT2(hei, hei));
 	colorGradingCheckBox.SetPos(XMFLOAT2(x, y += step));
 	colorGradingCheckBox.SetCheck(editor->renderPath->getColorGradingEnabled());
@@ -304,40 +289,6 @@ void PostprocessWindow::Create(EditorComponent* editor)
 		editor->renderPath->setColorGradingEnabled(args.bValue);
 	});
 	AddWidget(&colorGradingCheckBox);
-
-	colorGradingButton.Create("Load Color Grading LUT...");
-	colorGradingButton.SetTooltip("Load a color grading lookup texture. It must be a 256x16 RGBA image!");
-	colorGradingButton.SetPos(XMFLOAT2(x + 35, y));
-	colorGradingButton.SetSize(XMFLOAT2(200, hei));
-	colorGradingButton.OnClick([=](wiEventArgs args) {
-		auto x = editor->renderPath->getColorGradingTexture();
-
-		if (x == nullptr)
-		{
-			wiHelper::FileDialogParams params;
-			params.type = wiHelper::FileDialogParams::OPEN;
-			params.description = "Texture";
-			params.extensions.push_back("png");
-			params.extensions.push_back("tga");
-			params.extensions.push_back("bmp");
-			wiHelper::FileDialog(params, [=](std::string fileName) {
-				wiEvent::Subscribe_Once(SYSTEM_EVENT_THREAD_SAFE_POINT, [=](uint64_t userdata) {
-					editor->renderPath->setColorGradingTexture(wiResourceManager::Load(fileName, wiResourceManager::IMPORT_COLORGRADINGLUT));
-					if (editor->renderPath->getColorGradingTexture() != nullptr)
-					{
-						colorGradingButton.SetText(fileName);
-					}
-				});
-			});
-		}
-		else
-		{
-			editor->renderPath->setColorGradingTexture(nullptr);
-			colorGradingButton.SetText("Load Color Grading LUT...");
-		}
-
-	});
-	AddWidget(&colorGradingButton);
 
 	ditherCheckBox.Create("Dithering: ");
 	ditherCheckBox.SetTooltip("Toggle the full screen dithering effect. This helps to reduce color banding.");
@@ -422,7 +373,7 @@ void PostprocessWindow::Create(EditorComponent* editor)
 	AddWidget(&chromaticaberrationSlider);
 
 
-	Translate(XMFLOAT3((float)wiRenderer::GetDevice()->GetScreenWidth() - 500, 80, 0));
+	Translate(XMFLOAT3((float)editor->GetLogicalWidth() - 500, 80, 0));
 	SetVisible(false);
 
 }

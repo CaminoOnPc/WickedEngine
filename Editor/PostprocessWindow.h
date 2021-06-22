@@ -11,7 +11,6 @@ public:
 	wiSlider exposureSlider;
 	wiCheckBox lensFlareCheckBox;
 	wiCheckBox lightShaftsCheckBox;
-	wiCheckBox volumetricCloudsCheckBox;
 	wiComboBox aoComboBox;
 	wiSlider aoPowerSlider;
 	wiSlider aoRangeSlider;
@@ -22,17 +21,16 @@ public:
 	wiSlider screenSpaceShadowsStepCountSlider;
 	wiSlider screenSpaceShadowsRangeSlider;
 	wiCheckBox eyeAdaptionCheckBox;
+	wiSlider eyeAdaptionKeySlider;
+	wiSlider eyeAdaptionRateSlider;
 	wiCheckBox motionBlurCheckBox;
 	wiSlider motionBlurStrengthSlider;
 	wiCheckBox depthOfFieldCheckBox;
-	wiSlider depthOfFieldFocusSlider;
 	wiSlider depthOfFieldScaleSlider;
-	wiSlider depthOfFieldAspectSlider;
 	wiCheckBox bloomCheckBox;
 	wiSlider bloomStrengthSlider;
 	wiCheckBox fxaaCheckBox;
 	wiCheckBox colorGradingCheckBox;
-	wiButton colorGradingButton;
 	wiCheckBox ditherCheckBox;
 	wiCheckBox sharpenFilterCheckBox;
 	wiSlider sharpenFilterAmountSlider;

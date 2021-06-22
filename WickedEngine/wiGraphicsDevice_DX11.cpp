@@ -3,7 +3,6 @@
 #ifdef WICKEDENGINE_BUILD_DX11
 
 #include "wiHelper.h"
-#include "ResourceMapping.h"
 #include "wiBackLog.h"
 
 #pragma comment(lib,"dxguid.lib")
@@ -1142,9 +1141,15 @@ namespace DX11_Internal
 	{
 		ComPtr<ID3D11SamplerState> resource;
 	};
-	struct Query_DX11
+	struct QueryHeap_DX11
 	{
-		ComPtr<ID3D11Query> resource;
+		std::vector<ComPtr<ID3D11Query>> resources;
+	};
+	struct SwapChain_DX11
+	{
+		Microsoft::WRL::ComPtr<IDXGISwapChain1> swapChain;
+		Microsoft::WRL::ComPtr<ID3D11RenderTargetView> renderTargetView;
+		Microsoft::WRL::ComPtr<ID3D11Texture2D> backBuffer;
 	};
 
 	Resource_DX11* to_internal(const GPUResource* param)
@@ -1167,9 +1172,13 @@ namespace DX11_Internal
 	{
 		return static_cast<Sampler_DX11*>(param->internal_state.get());
 	}
-	Query_DX11* to_internal(const GPUQuery* param)
+	QueryHeap_DX11* to_internal(const GPUQueryHeap* param)
 	{
-		return static_cast<Query_DX11*>(param->internal_state.get());
+		return static_cast<QueryHeap_DX11*>(param->internal_state.get());
+	}
+	SwapChain_DX11* to_internal(const SwapChain* param)
+	{
+		return static_cast<SwapChain_DX11*>(param->internal_state.get());
 	}
 }
 using namespace DX11_Internal;
@@ -1326,22 +1335,9 @@ void GraphicsDevice_DX11::pso_validate(CommandList cmd)
 }
 
 // Engine functions
-GraphicsDevice_DX11::GraphicsDevice_DX11(wiPlatform::window_type window, bool fullscreen, bool debuglayer)
+GraphicsDevice_DX11::GraphicsDevice_DX11(bool debuglayer)
 {
 	DEBUGDEVICE = debuglayer;
-	FULLSCREEN = fullscreen;
-
-#ifndef PLATFORM_UWP
-	RECT rect;
-	GetClientRect(window, &rect);
-	RESOLUTIONWIDTH = rect.right - rect.left;
-	RESOLUTIONHEIGHT = rect.bottom - rect.top;
-#else PLATFORM_UWP
-	float dpiscale = wiPlatform::GetDPIScaling();
-	RESOLUTIONWIDTH = int(window->Bounds.Width * dpiscale);
-	RESOLUTIONHEIGHT = int(window->Bounds.Height * dpiscale);
-#endif
-
 
 #ifndef PLATFORM_UWP
 	HMODULE dx11 = LoadLibraryEx(L"d3d11.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -1393,12 +1389,19 @@ GraphicsDevice_DX11::GraphicsDevice_DX11(wiPlatform::window_type window, bool fu
 
 	ComPtr<IDXGIDevice2> pDXGIDevice;
 	hr = device.As(&pDXGIDevice);
+	assert(SUCCEEDED(hr));
 
-	ComPtr<IDXGIAdapter> pDXGIAdapter;
-	hr = pDXGIDevice->GetParent(__uuidof(IDXGIAdapter), (void**)&pDXGIAdapter);
+	// Ensure that DXGI does not queue more than one frame at a time. This both reduces latency and
+	// ensures that the application will only render after each VSync, minimizing power consumption.
+	hr = pDXGIDevice->SetMaximumFrameLatency(1);
+	assert(SUCCEEDED(hr));
 
-	ComPtr<IDXGIFactory2> pIDXGIFactory;
-	pDXGIAdapter->GetParent(__uuidof(IDXGIFactory2), (void**)&pIDXGIFactory);
+	ComPtr<IDXGIAdapter> DXGIAdapter;
+	hr = pDXGIDevice->GetParent(__uuidof(IDXGIAdapter), (void**)&DXGIAdapter);
+	assert(SUCCEEDED(hr));
+
+	hr = DXGIAdapter->GetParent(__uuidof(IDXGIFactory2), (void**)&DXGIFactory);
+	assert(SUCCEEDED(hr));
 
 	if (debuglayer)
 	{
@@ -1427,47 +1430,13 @@ GraphicsDevice_DX11::GraphicsDevice_DX11(wiPlatform::window_type window, bool fu
 		}
 	}
 
-
-	DXGI_SWAP_CHAIN_DESC1 sd = {};
-	sd.Width = RESOLUTIONWIDTH;
-	sd.Height = RESOLUTIONHEIGHT;
-	sd.Format = _ConvertFormat(GetBackBufferFormat());
-	sd.Stereo = false;
-	sd.SampleDesc.Count = 1; // Don't use multi-sampling.
-	sd.SampleDesc.Quality = 0;
-	sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-	sd.BufferCount = 2; // Use double-buffering to minimize latency.
-	sd.Flags = 0;
-	sd.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
-
-#ifndef PLATFORM_UWP
-	sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
-	sd.Scaling = DXGI_SCALING_STRETCH;
-
-	DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreenDesc;
-	fullscreenDesc.RefreshRate.Numerator = 60;
-	fullscreenDesc.RefreshRate.Denominator = 1;
-	fullscreenDesc.Scaling = DXGI_MODE_SCALING_UNSPECIFIED; // needs to be unspecified for correct fullscreen scaling!
-	fullscreenDesc.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_PROGRESSIVE;
-	fullscreenDesc.Windowed = !fullscreen;
-	hr = pIDXGIFactory->CreateSwapChainForHwnd(device.Get(), window, &sd, &fullscreenDesc, nullptr, &swapChain);
-#else
-	sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL; // All Windows Store apps must use this SwapEffect.
-	sd.Scaling = DXGI_SCALING_ASPECT_RATIO_STRETCH;
-
-	hr = pIDXGIFactory->CreateSwapChainForCoreWindow(device.Get(), reinterpret_cast<IUnknown*>(window.Get()), &sd, nullptr, &swapChain);
-#endif
-
-	if (FAILED(hr))
+	D3D11_QUERY_DESC queryDesc = {};
+	queryDesc.Query = D3D11_QUERY_TIMESTAMP_DISJOINT;
+	for (auto& x : disjointQueries)
 	{
-		wiHelper::messageBox("Failed to create a swapchain for the graphics device!", "Error!");
-		wiPlatform::Exit();
+		hr = device->CreateQuery(&queryDesc, &x);
+		assert(SUCCEEDED(hr));
 	}
-
-	// Ensure that DXGI does not queue more than one frame at a time. This both reduces latency and
-	// ensures that the application will only render after each VSync, minimizing power consumption.
-	hr = pDXGIDevice->SetMaximumFrameLatency(1);
-
 
 	D3D_FEATURE_LEVEL aquiredFeatureLevel = device->GetFeatureLevel();
 	if (aquiredFeatureLevel >= D3D_FEATURE_LEVEL_11_0)
@@ -1522,55 +1491,113 @@ GraphicsDevice_DX11::GraphicsDevice_DX11(wiPlatform::window_type window, bool fu
 
 void GraphicsDevice_DX11::CreateBackBufferResources()
 {
+	//HRESULT hr;
+
+	//hr = swapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), &backBuffer);
+	//if (FAILED(hr)) {
+	//	wiHelper::messageBox("BackBuffer creation Failed!", "Error!");
+	//	wiPlatform::Exit();
+	//}
+
+	//hr = device->CreateRenderTargetView(backBuffer.Get(), nullptr, &renderTargetView);
+	//if (FAILED(hr)) {
+	//	wiHelper::messageBox("Main Rendertarget creation Failed!", "Error!");
+	//	wiPlatform::Exit();
+	//}
+}
+
+bool GraphicsDevice_DX11::CreateSwapChain(const SwapChainDesc* pDesc, wiPlatform::window_type window, SwapChain* swapChain) const
+{
+	auto internal_state = std::static_pointer_cast<SwapChain_DX11>(swapChain->internal_state);
+	if (swapChain->internal_state == nullptr)
+	{
+		internal_state = std::make_shared<SwapChain_DX11>();
+	}
+	swapChain->internal_state = internal_state;
+	swapChain->desc = *pDesc;
 	HRESULT hr;
 
-	hr = swapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), &backBuffer);
-	if (FAILED(hr)) {
-		wiHelper::messageBox("BackBuffer creation Failed!", "Error!");
-		wiPlatform::Exit();
-	}
-
-	hr = device->CreateRenderTargetView(backBuffer.Get(), nullptr, &renderTargetView);
-	if (FAILED(hr)) {
-		wiHelper::messageBox("Main Rendertarget creation Failed!", "Error!");
-		wiPlatform::Exit();
-	}
-}
-
-void GraphicsDevice_DX11::SetResolution(int width, int height)
-{
-	if ((width != RESOLUTIONWIDTH || height != RESOLUTIONHEIGHT) && width > 0 && height > 0)
+	if (internal_state->swapChain == nullptr)
 	{
-		RESOLUTIONWIDTH = width;
-		RESOLUTIONHEIGHT = height;
+		// Create swapchain:
+		DXGI_SWAP_CHAIN_DESC1 sd = {};
+		sd.Width = pDesc->width;
+		sd.Height = pDesc->height;
+		sd.Format = _ConvertFormat(pDesc->format);
+		sd.Stereo = false;
+		sd.SampleDesc.Count = 1;
+		sd.SampleDesc.Quality = 0;
+		sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+		sd.BufferCount = pDesc->buffercount;
+		sd.Flags = 0;
+		sd.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+		sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
 
-		backBuffer.Reset();
-		renderTargetView.Reset();
+#ifdef PLATFORM_UWP
+		sd.Scaling = DXGI_SCALING_ASPECT_RATIO_STRETCH;
 
-		HRESULT hr = swapChain->ResizeBuffers(GetBackBufferCount(), width, height, _ConvertFormat(GetBackBufferFormat()), 0);
-		assert(SUCCEEDED(hr));
+		hr = DXGIFactory->CreateSwapChainForCoreWindow(
+			device.Get(),
+			static_cast<IUnknown*>(winrt::get_abi(*window)),
+			&sd,
+			nullptr,
+			&internal_state->swapChain
+		);
+#else
+		sd.Scaling = DXGI_SCALING_STRETCH;
 
-		CreateBackBufferResources();
+		DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreenDesc;
+		fullscreenDesc.RefreshRate.Numerator = 60;
+		fullscreenDesc.RefreshRate.Denominator = 1;
+		fullscreenDesc.Scaling = DXGI_MODE_SCALING_UNSPECIFIED; // needs to be unspecified for correct fullscreen scaling!
+		fullscreenDesc.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_PROGRESSIVE;
+		fullscreenDesc.Windowed = !pDesc->fullscreen;
+		hr = DXGIFactory->CreateSwapChainForHwnd(
+			device.Get(),
+			window,
+			&sd,
+			&fullscreenDesc,
+			nullptr,
+			&internal_state->swapChain
+		);
+#endif
+
+		if (FAILED(hr))
+		{
+			return false;
+		}
 	}
+	else
+	{
+		// Resize swapchain:
+		internal_state->backBuffer.Reset();
+		internal_state->renderTargetView.Reset();
+
+		hr = internal_state->swapChain->ResizeBuffers(
+			pDesc->buffercount,
+			pDesc->width,
+			pDesc->height,
+			_ConvertFormat(pDesc->format),
+			0
+		);
+		assert(SUCCEEDED(hr));
+	}
+
+	hr = internal_state->swapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), &internal_state->backBuffer);
+	if (FAILED(hr))
+	{
+		return false;
+	}
+
+	hr = device->CreateRenderTargetView(internal_state->backBuffer.Get(), nullptr, &internal_state->renderTargetView);
+	if (FAILED(hr))
+	{
+		return false;
+	}
+
+	return true;
 }
-
-Texture GraphicsDevice_DX11::GetBackBuffer()
-{
-	auto internal_state = std::make_shared<Texture_DX11>();
-	internal_state->resource = backBuffer;
-
-	Texture result;
-	result.internal_state = internal_state;
-	result.type = GPUResource::GPU_RESOURCE_TYPE::TEXTURE;
-
-	D3D11_TEXTURE2D_DESC desc;
-	backBuffer->GetDesc(&desc);
-	result.desc = _ConvertTextureDesc_Inv(&desc);
-
-	return result;
-}
-
-bool GraphicsDevice_DX11::CreateBuffer(const GPUBufferDesc *pDesc, const SubresourceData* pInitialData, GPUBuffer *pBuffer)
+bool GraphicsDevice_DX11::CreateBuffer(const GPUBufferDesc *pDesc, const SubresourceData* pInitialData, GPUBuffer *pBuffer) const
 {
 	auto internal_state = std::make_shared<Resource_DX11>();
 	pBuffer->internal_state = internal_state;
@@ -1609,7 +1636,7 @@ bool GraphicsDevice_DX11::CreateBuffer(const GPUBufferDesc *pDesc, const Subreso
 
 	return SUCCEEDED(hr);
 }
-bool GraphicsDevice_DX11::CreateTexture(const TextureDesc* pDesc, const SubresourceData *pInitialData, Texture *pTexture)
+bool GraphicsDevice_DX11::CreateTexture(const TextureDesc* pDesc, const SubresourceData *pInitialData, Texture *pTexture) const
 {
 	auto internal_state = std::make_shared<Texture_DX11>();
 	pTexture->internal_state = internal_state;
@@ -1683,7 +1710,7 @@ bool GraphicsDevice_DX11::CreateTexture(const TextureDesc* pDesc, const Subresou
 
 	return SUCCEEDED(hr);
 }
-bool GraphicsDevice_DX11::CreateShader(SHADERSTAGE stage, const void *pShaderBytecode, size_t BytecodeLength, Shader *pShader)
+bool GraphicsDevice_DX11::CreateShader(SHADERSTAGE stage, const void *pShaderBytecode, size_t BytecodeLength, Shader *pShader) const
 {
 	pShader->stage = stage;
 
@@ -1741,7 +1768,7 @@ bool GraphicsDevice_DX11::CreateShader(SHADERSTAGE stage, const void *pShaderByt
 
 	return SUCCEEDED(hr);
 }
-bool GraphicsDevice_DX11::CreateSampler(const SamplerDesc *pSamplerDesc, Sampler *pSamplerState)
+bool GraphicsDevice_DX11::CreateSampler(const SamplerDesc *pSamplerDesc, Sampler *pSamplerState) const
 {
 	auto internal_state = std::make_shared<Sampler_DX11>();
 	pSamplerState->internal_state = internal_state;
@@ -1767,42 +1794,43 @@ bool GraphicsDevice_DX11::CreateSampler(const SamplerDesc *pSamplerDesc, Sampler
 
 	return SUCCEEDED(hr);
 }
-bool GraphicsDevice_DX11::CreateQuery(const GPUQueryDesc *pDesc, GPUQuery *pQuery)
+bool GraphicsDevice_DX11::CreateQueryHeap(const GPUQueryHeapDesc* pDesc, GPUQueryHeap* pQueryHeap) const
 {
-	auto internal_state = std::make_shared<Query_DX11>();
-	pQuery->internal_state = internal_state;
+	auto internal_state = std::make_shared<QueryHeap_DX11>();
+	pQueryHeap->internal_state = internal_state;
 
-	pQuery->desc = *pDesc;
+	pQueryHeap->desc = *pDesc;
 
 	D3D11_QUERY_DESC desc;
 	desc.MiscFlags = 0;
 	desc.Query = D3D11_QUERY_EVENT;
-	if (pDesc->Type == GPU_QUERY_TYPE_EVENT)
+	switch (pDesc->type)
 	{
-		desc.Query = D3D11_QUERY_EVENT;
-	}
-	else if (pDesc->Type == GPU_QUERY_TYPE_OCCLUSION)
-	{
-		desc.Query = D3D11_QUERY_OCCLUSION;
-	}
-	else if (pDesc->Type == GPU_QUERY_TYPE_OCCLUSION_PREDICATE)
-	{
-		desc.Query = D3D11_QUERY_OCCLUSION_PREDICATE;
-	}
-	else if (pDesc->Type == GPU_QUERY_TYPE_TIMESTAMP)
-	{
+	default:
+	case GPU_QUERY_TYPE_TIMESTAMP:
 		desc.Query = D3D11_QUERY_TIMESTAMP;
+		break;
+	case GPU_QUERY_TYPE_OCCLUSION:
+		desc.Query = D3D11_QUERY_OCCLUSION;
+		break;
+	case GPU_QUERY_TYPE_OCCLUSION_BINARY:
+		desc.Query = D3D11_QUERY_OCCLUSION_PREDICATE;
+		break;
 	}
-	else if (pDesc->Type == GPU_QUERY_TYPE_TIMESTAMP_DISJOINT)
+
+	internal_state->resources.resize(pDesc->queryCount);
+	for (uint32_t i = 0; i < pDesc->queryCount; ++i)
 	{
-		desc.Query = D3D11_QUERY_TIMESTAMP_DISJOINT;
+		HRESULT hr = device->CreateQuery(&desc, &internal_state->resources[i]);
+		if (!SUCCEEDED(hr))
+		{
+			return false;
+		}
 	}
 
-	HRESULT hr = device->CreateQuery(&desc, &internal_state->resource);
-
-	return SUCCEEDED(hr);
+	return true;
 }
-bool GraphicsDevice_DX11::CreatePipelineState(const PipelineStateDesc* pDesc, PipelineState* pso)
+bool GraphicsDevice_DX11::CreatePipelineState(const PipelineStateDesc* pDesc, PipelineState* pso) const
 {
 	auto internal_state = std::make_shared<PipelineState_DX11>();
 	pso->internal_state = internal_state;
@@ -1826,8 +1854,11 @@ bool GraphicsDevice_DX11::CreatePipelineState(const PipelineStateDesc* pDesc, Pi
 			if (desc[i].AlignedByteOffset == InputLayout::APPEND_ALIGNED_ELEMENT)
 				desc[i].AlignedByteOffset = D3D11_APPEND_ALIGNED_ELEMENT;
 			desc[i].InputSlotClass = _ConvertInputClassification(pDesc->il->elements[i].InputSlotClass);
-			desc[i].InstanceDataStepRate = pDesc->il->elements[i].InstanceDataStepRate;
-
+			desc[i].InstanceDataStepRate = 0;
+			if (desc[i].InputSlotClass == D3D11_INPUT_PER_INSTANCE_DATA)
+			{
+				desc[i].InstanceDataStepRate = 1;
+			}
 		}
 
 		assert(pDesc->vs != nullptr);
@@ -1956,7 +1987,7 @@ bool GraphicsDevice_DX11::CreatePipelineState(const PipelineStateDesc* pDesc, Pi
 
 	return true;
 }
-bool GraphicsDevice_DX11::CreateRenderPass(const RenderPassDesc* pDesc, RenderPass* renderpass)
+bool GraphicsDevice_DX11::CreateRenderPass(const RenderPassDesc* pDesc, RenderPass* renderpass) const
 {
 	renderpass->internal_state = emptyresource;
 
@@ -1965,7 +1996,7 @@ bool GraphicsDevice_DX11::CreateRenderPass(const RenderPassDesc* pDesc, RenderPa
 	return true;
 }
 
-int GraphicsDevice_DX11::CreateSubresource(Texture* texture, SUBRESOURCE_TYPE type, uint32_t firstSlice, uint32_t sliceCount, uint32_t firstMip, uint32_t mipCount)
+int GraphicsDevice_DX11::CreateSubresource(Texture* texture, SUBRESOURCE_TYPE type, uint32_t firstSlice, uint32_t sliceCount, uint32_t firstMip, uint32_t mipCount) const
 {
 	auto internal_state = to_internal(texture);
 
@@ -2360,7 +2391,7 @@ int GraphicsDevice_DX11::CreateSubresource(Texture* texture, SUBRESOURCE_TYPE ty
 	}
 	return -1;
 }
-int GraphicsDevice_DX11::CreateSubresource(GPUBuffer* buffer, SUBRESOURCE_TYPE type, uint64_t offset, uint64_t size)
+int GraphicsDevice_DX11::CreateSubresource(GPUBuffer* buffer, SUBRESOURCE_TYPE type, uint64_t offset, uint64_t size) const
 {
 	auto internal_state = to_internal(buffer);
 	const GPUBufferDesc& desc = buffer->GetDesc();
@@ -2479,7 +2510,7 @@ int GraphicsDevice_DX11::CreateSubresource(GPUBuffer* buffer, SUBRESOURCE_TYPE t
 	return -1;
 }
 
-void GraphicsDevice_DX11::Map(const GPUResource* resource, Mapping* mapping)
+void GraphicsDevice_DX11::Map(const GPUResource* resource, Mapping* mapping) const
 {
 	auto internal_state = to_internal(resource);
 
@@ -2513,48 +2544,44 @@ void GraphicsDevice_DX11::Map(const GPUResource* resource, Mapping* mapping)
 		mapping->rowpitch = 0;
 	}
 }
-void GraphicsDevice_DX11::Unmap(const GPUResource* resource)
+void GraphicsDevice_DX11::Unmap(const GPUResource* resource) const
 {
 	auto internal_state = to_internal(resource);
 	immediateContext->Unmap(internal_state->resource.Get(), 0);
 }
-bool GraphicsDevice_DX11::QueryRead(const GPUQuery* query, GPUQueryResult* result)
+void GraphicsDevice_DX11::QueryRead(const GPUQueryHeap* heap, uint32_t index, uint32_t count, uint64_t* results) const
 {
+	if (count == 0)
+		return;
+
+	auto internal_state = to_internal(heap);
+
 	const uint32_t _flags = D3D11_ASYNC_GETDATA_DONOTFLUSH;
 
-	auto internal_state = to_internal(query);
-	if (internal_state->resource == nullptr)
-		return false;
-
-	ID3D11Query* QUERY = internal_state->resource.Get();
-
 	HRESULT hr = S_OK;
-	switch (query->desc.Type)
-	{
-	case GPU_QUERY_TYPE_TIMESTAMP:
-		hr = immediateContext->GetData(QUERY, &result->result_timestamp, sizeof(uint64_t), _flags);
-		break;
-	case GPU_QUERY_TYPE_TIMESTAMP_DISJOINT:
-	{
-		D3D11_QUERY_DATA_TIMESTAMP_DISJOINT _temp;
-		hr = immediateContext->GetData(QUERY, &_temp, sizeof(_temp), _flags);
-		result->result_timestamp_frequency = _temp.Frequency;
-	}
-	break;
-	case GPU_QUERY_TYPE_EVENT:
-	case GPU_QUERY_TYPE_OCCLUSION:
-		hr = immediateContext->GetData(QUERY, &result->result_passed_sample_count, sizeof(uint64_t), _flags);
-		break;
-	case GPU_QUERY_TYPE_OCCLUSION_PREDICATE:
-	{
-		BOOL passed = FALSE;
-		hr = immediateContext->GetData(QUERY, &passed, sizeof(BOOL), _flags);
-		result->result_passed_sample_count = (uint64_t)passed;
-		break;
-	}
-	}
 
-	return hr != S_FALSE;
+	assert(index + count <= internal_state->resources.size());
+	for (uint32_t i = 0; i < count; ++i)
+	{
+		ID3D11Query* QUERY = internal_state->resources[index + i].Get();
+
+		switch (heap->desc.type)
+		{
+		case GPU_QUERY_TYPE_TIMESTAMP:
+			hr = immediateContext->GetData(QUERY, &results[i], sizeof(uint64_t), _flags);
+			break;
+		case GPU_QUERY_TYPE_OCCLUSION:
+			hr = immediateContext->GetData(QUERY, &results[i], sizeof(uint64_t), _flags);
+			break;
+		case GPU_QUERY_TYPE_OCCLUSION_BINARY:
+		{
+			BOOL passed = FALSE;
+			hr = immediateContext->GetData(QUERY, &passed, sizeof(BOOL), _flags);
+			results[i] = (uint64_t)passed;
+			break;
+		}
+		}
+	}
 }
 
 void GraphicsDevice_DX11::SetCommonSampler(const StaticSampler* sam)
@@ -2568,28 +2595,14 @@ void GraphicsDevice_DX11::SetName(GPUResource* pResource, const char* name)
 	internal_state->resource->SetPrivateData(WKPDID_D3DDebugObjectName, (UINT)strlen(name), name);
 }
 
-void GraphicsDevice_DX11::PresentBegin(CommandList cmd)
-{
-	ID3D11RenderTargetView* RTV = renderTargetView.Get();
-	deviceContexts[cmd]->OMSetRenderTargets(1, &RTV, 0);
-	float ClearColor[4] = { 0, 0, 0, 1.0f }; // red,green,blue,alpha
-	deviceContexts[cmd]->ClearRenderTargetView(RTV, ClearColor);
-}
-void GraphicsDevice_DX11::PresentEnd(CommandList cmd)
-{
-	SubmitCommandLists();
-
-	swapChain->Present(VSYNC, 0);
-}
-
-
-CommandList GraphicsDevice_DX11::BeginCommandList()
+CommandList GraphicsDevice_DX11::BeginCommandList(QUEUE_TYPE queue)
 {
 	CommandList cmd = cmd_count.fetch_add(1);
+	assert(cmd < COMMANDLIST_COUNT);
+
 	if (deviceContexts[cmd] == nullptr)
 	{
 		// need to create one more command list:
-		assert(cmd < COMMANDLIST_COUNT);
 
 		HRESULT hr = device->CreateDeferredContext(0, &deviceContexts[cmd]);
 		assert(SUCCEEDED(hr));
@@ -2621,15 +2634,6 @@ CommandList GraphicsDevice_DX11::BeginCommandList()
 		}
 	}
 
-	D3D11_VIEWPORT vp = {};
-	vp.Width = (float)RESOLUTIONWIDTH;
-	vp.Height = (float)RESOLUTIONHEIGHT;
-	vp.MinDepth = 0.0f;
-	vp.MaxDepth = 1.0f;
-	vp.TopLeftX = 0;
-	vp.TopLeftY = 0;
-	deviceContexts[cmd]->RSSetViewports(1, &vp);
-
 	D3D11_RECT pRects[8];
 	for (uint32_t i = 0; i < 8; ++i)
 	{
@@ -2657,6 +2661,7 @@ CommandList GraphicsDevice_DX11::BeginCommandList()
 	prev_dss[cmd] = {};
 	prev_il[cmd] = {};
 	prev_pt[cmd] = {};
+	swapchains[cmd].clear();
 
 	memset(raster_uavs[cmd], 0, sizeof(raster_uavs[cmd]));
 	raster_uavs_slot[cmd] = {};
@@ -2670,36 +2675,79 @@ CommandList GraphicsDevice_DX11::BeginCommandList()
 }
 void GraphicsDevice_DX11::SubmitCommandLists()
 {
+	const int disjoint_write = FRAMECOUNT % arraysize(disjointQueries);
+	const int disjoint_read = (FRAMECOUNT + 1) % arraysize(disjointQueries);
+	immediateContext->Begin(disjointQueries[disjoint_write].Get());
+
 	// Execute deferred command lists:
 	CommandList cmd_last = cmd_count.load();
 	cmd_count.store(0);
 	for (CommandList cmd = 0; cmd < cmd_last; ++cmd)
 	{
-		deviceContexts[cmd]->FinishCommandList(false, &commandLists[cmd]);
+		HRESULT hr = deviceContexts[cmd]->FinishCommandList(false, &commandLists[cmd]);
+		assert(SUCCEEDED(hr));
 		immediateContext->ExecuteCommandList(commandLists[cmd].Get(), false);
 		commandLists[cmd].Reset();
+
+		for (auto& swapchain : swapchains[cmd])
+		{
+			to_internal(swapchain)->swapChain->Present(swapchain->desc.vsync, 0);
+		}
 	}
 	immediateContext->ClearState();
+
+	immediateContext->End(disjointQueries[disjoint_write].Get());
+	D3D11_QUERY_DATA_TIMESTAMP_DISJOINT disjoint;
+	HRESULT hr = immediateContext->GetData(
+		disjointQueries[disjoint_read].Get(),
+		&disjoint,
+		sizeof(disjoint),
+		D3D11_ASYNC_GETDATA_DONOTFLUSH
+	);
+	if (disjoint.Disjoint == FALSE && hr == S_OK)
+	{
+		TIMESTAMP_FREQUENCY = disjoint.Frequency;
+	}
 
 	FRAMECOUNT++;
 }
 
-void GraphicsDevice_DX11::WaitForGPU()
+void GraphicsDevice_DX11::WaitForGPU() const
 {
 	immediateContext->Flush();
 
-	GPUQuery query;
-	GPUQueryDesc desc;
-	desc.Type = GPU_QUERY_TYPE_EVENT;
-	bool success = CreateQuery(&desc, &query);
-	assert(success);
-	auto internal_state = to_internal(&query);
-	immediateContext->End(internal_state->resource.Get());
+
+	D3D11_QUERY_DESC desc;
+	desc.MiscFlags = 0;
+	desc.Query = D3D11_QUERY_EVENT;
+
+	ComPtr<ID3D11Query> query;
+	HRESULT hr = device->CreateQuery(&desc, &query);
+	assert(SUCCEEDED(hr));
+	immediateContext->End(query.Get());
 	BOOL result;
-	while (immediateContext->GetData(internal_state->resource.Get(), &result, sizeof(result), 0) == S_FALSE);
+	while (immediateContext->GetData(query.Get(), &result, sizeof(result), 0) == S_FALSE);
 	assert(result == TRUE);
 }
 
+
+Texture GraphicsDevice_DX11::GetBackBuffer(const SwapChain* swapchain) const
+{
+	auto swapchain_internal = to_internal(swapchain);
+
+	auto internal_state = std::make_shared<Texture_DX11>();
+	internal_state->resource = swapchain_internal->backBuffer;
+
+	Texture result;
+	result.internal_state = internal_state;
+	result.type = GPUResource::GPU_RESOURCE_TYPE::TEXTURE;
+
+	D3D11_TEXTURE2D_DESC desc;
+	swapchain_internal->backBuffer->GetDesc(&desc);
+	result.desc = _ConvertTextureDesc_Inv(&desc);
+
+	return result;
+}
 
 void GraphicsDevice_DX11::commit_allocations(CommandList cmd)
 {
@@ -2714,6 +2762,16 @@ void GraphicsDevice_DX11::commit_allocations(CommandList cmd)
 }
 
 
+void GraphicsDevice_DX11::RenderPassBegin(const SwapChain* swapchain, CommandList cmd)
+{
+	swapchains[cmd].push_back(swapchain);
+	active_renderpass[cmd] = &dummyrenderpass;
+	auto internal_state = to_internal(swapchain);
+
+	ID3D11RenderTargetView* RTV = internal_state->renderTargetView.Get();
+	deviceContexts[cmd]->OMSetRenderTargets(1, &RTV, 0);
+	deviceContexts[cmd]->ClearRenderTargetView(RTV, swapchain->desc.clearcolor);
+}
 void GraphicsDevice_DX11::RenderPassBegin(const RenderPass* renderpass, CommandList cmd)
 {
 	active_renderpass[cmd] = renderpass;
@@ -2820,10 +2878,11 @@ void GraphicsDevice_DX11::RenderPassEnd(CommandList cmd)
 	}
 	active_renderpass[cmd] = nullptr;
 }
-void GraphicsDevice_DX11::BindScissorRects(uint32_t numRects, const Rect* rects, CommandList cmd) {
+void GraphicsDevice_DX11::BindScissorRects(uint32_t numRects, const Rect* rects, CommandList cmd)
+{
 	assert(rects != nullptr);
-	assert(numRects <= 8);
-	D3D11_RECT pRects[8];
+	assert(numRects <= D3D11_VIEWPORT_AND_SCISSORRECT_MAX_INDEX);
+	D3D11_RECT pRects[D3D11_VIEWPORT_AND_SCISSORRECT_MAX_INDEX];
 	for(uint32_t i = 0; i < numRects; ++i) {
 		pRects[i].bottom = (LONG)rects[i].bottom;
 		pRects[i].left = (LONG)rects[i].left;
@@ -2834,8 +2893,9 @@ void GraphicsDevice_DX11::BindScissorRects(uint32_t numRects, const Rect* rects,
 }
 void GraphicsDevice_DX11::BindViewports(uint32_t NumViewports, const Viewport* pViewports, CommandList cmd)
 {
-	assert(NumViewports <= 6);
-	D3D11_VIEWPORT d3dViewPorts[6];
+	assert(pViewports != nullptr);
+	assert(NumViewports <= D3D11_VIEWPORT_AND_SCISSORRECT_MAX_INDEX);
+	D3D11_VIEWPORT d3dViewPorts[D3D11_VIEWPORT_AND_SCISSORRECT_MAX_INDEX];
 	for (uint32_t i = 0; i < NumViewports; ++i)
 	{
 		d3dViewPorts[i].TopLeftX = pViewports[i].TopLeftX;
@@ -3202,19 +3262,15 @@ void GraphicsDevice_DX11::UpdateBuffer(const GPUBuffer* buffer, const void* data
 		deviceContexts[cmd]->UpdateSubresource(internal_state->resource.Get(), 0, &box, data, 0, 0);
 	}
 }
-void GraphicsDevice_DX11::QueryBegin(const GPUQuery* query, CommandList cmd)
+void GraphicsDevice_DX11::QueryBegin(const GPUQueryHeap* heap, uint32_t index, CommandList cmd)
 {
-	auto internal_state = to_internal(query);
-	if (internal_state->resource == nullptr)
-		return;
-	deviceContexts[cmd]->Begin(internal_state->resource.Get());
+	auto internal_state = to_internal(heap);
+	deviceContexts[cmd]->Begin(internal_state->resources[index].Get());
 }
-void GraphicsDevice_DX11::QueryEnd(const GPUQuery* query, CommandList cmd)
+void GraphicsDevice_DX11::QueryEnd(const GPUQueryHeap* heap, uint32_t index, CommandList cmd)
 {
-	auto internal_state = to_internal(query);
-	if (internal_state->resource == nullptr)
-		return;
-	deviceContexts[cmd]->End(internal_state->resource.Get());
+	auto internal_state = to_internal(heap);
+	deviceContexts[cmd]->End(internal_state->resources[index].Get());
 }
 
 GraphicsDevice::GPUAllocation GraphicsDevice_DX11::AllocateGPU(size_t dataSize, CommandList cmd)

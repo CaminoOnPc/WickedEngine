@@ -3,7 +3,7 @@
 #include "wiImage.h"
 #include "wiHelper.h"
 #include "wiTextureHelper.h"
-#include "ResourceMapping.h"
+#include "shaders/ResourceMapping.h"
 #include "wiProfiler.h"
 
 using namespace wiGraphics;
@@ -12,7 +12,7 @@ void RenderPath3D::ResizeBuffers()
 {
 	GraphicsDevice* device = wiRenderer::GetDevice();
 
-	FORMAT defaultTextureFormat = device->GetBackBufferFormat();
+	FORMAT defaultTextureFormat = FORMAT_R10G10B10A2_UNORM;
 	XMUINT2 internalResolution = GetInternalResolution();
 
 	camera->CreatePerspective((float)internalResolution.x, (float)internalResolution.y, camera->zNearP, camera->zFarP);
@@ -34,6 +34,7 @@ void RenderPath3D::ResizeBuffers()
 		device->CreateTexture(&desc, nullptr, &rtGbuffer[GBUFFER_COLOR]);
 		device->SetName(&rtGbuffer[GBUFFER_COLOR], "rtGbuffer[GBUFFER_COLOR]");
 
+		desc.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE;
 		desc.Format = FORMAT_R8G8B8A8_UNORM;
 		device->CreateTexture(&desc, nullptr, &rtGbuffer[GBUFFER_NORMAL_ROUGHNESS]);
 		device->SetName(&rtGbuffer[GBUFFER_NORMAL_ROUGHNESS], "rtGbuffer[GBUFFER_NORMAL_ROUGHNESS]");
@@ -60,15 +61,6 @@ void RenderPath3D::ResizeBuffers()
 			device->SetName(&rtGbuffer_resolved[GBUFFER_VELOCITY], "rtGbuffer_resolved[GBUFFER_VELOCITY]");
 
 		}
-	}
-	{
-		TextureDesc desc;
-		desc.BindFlags = BIND_SHADER_RESOURCE | BIND_UNORDERED_ACCESS;
-		desc.Format = FORMAT_R16G16B16A16_FLOAT;
-		desc.Width = internalResolution.x;
-		desc.Height = internalResolution.y;
-		device->CreateTexture(&desc, nullptr, &rtSSR);
-		device->SetName(&rtSSR, "rtSSR");
 	}
 	{
 		TextureDesc desc;
@@ -100,7 +92,7 @@ void RenderPath3D::ResizeBuffers()
 	{
 		TextureDesc desc;
 		desc.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE;
-		desc.Format = FORMAT_R8G8B8A8_SNORM;
+		desc.Format = FORMAT_R8G8_SNORM;
 		desc.Width = internalResolution.x;
 		desc.Height = internalResolution.y;
 		device->CreateTexture(&desc, nullptr, &rtWaterRipple);
@@ -138,25 +130,16 @@ void RenderPath3D::ResizeBuffers()
 		desc.Format = FORMAT_R11G11B10_FLOAT;
 		desc.Width = internalResolution.x / 4;
 		desc.Height = internalResolution.y / 4;
-		desc.layout = IMAGE_LAYOUT_SHADER_RESOURCE;
 		device->CreateTexture(&desc, nullptr, &rtReflection);
 		device->SetName(&rtReflection, "rtReflection");
 	}
 	{
 		TextureDesc desc;
 		desc.BindFlags = BIND_SHADER_RESOURCE | BIND_UNORDERED_ACCESS;
-		desc.Format = FORMAT_R8_UNORM;
-		desc.Width = internalResolution.x;
-		desc.Height = internalResolution.y;
-		device->CreateTexture(&desc, nullptr, &rtAO);
-		device->SetName(&rtAO, "rtAO");
-	}
-	{
-		TextureDesc desc;
-		desc.BindFlags = BIND_SHADER_RESOURCE | BIND_UNORDERED_ACCESS;
 		desc.Format = FORMAT_R32G32B32A32_UINT;
-		desc.Width = internalResolution.x;
-		desc.Height = internalResolution.y;
+		desc.Width = internalResolution.x / 2;
+		desc.Height = internalResolution.y / 2;
+		desc.layout = IMAGE_LAYOUT_SHADER_RESOURCE_COMPUTE;
 		device->CreateTexture(&desc, nullptr, &rtShadow);
 		device->SetName(&rtShadow, "rtShadow");
 	}
@@ -184,31 +167,6 @@ void RenderPath3D::ResizeBuffers()
 			desc.SampleCount = 1;
 			device->CreateTexture(&desc, nullptr, &rtSun_resolved);
 			device->SetName(&rtSun_resolved, "rtSun_resolved");
-		}
-	}
-	{
-		TextureDesc desc;
-		desc.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE | BIND_UNORDERED_ACCESS;
-		desc.Format = FORMAT_R11G11B10_FLOAT;
-		desc.Width = internalResolution.x / 4;
-		desc.Height = internalResolution.y / 4;
-		desc.MipLevels = std::min(5u, (uint32_t)std::log2(std::max(desc.Width, desc.Height)));
-		device->CreateTexture(&desc, nullptr, &rtBloom);
-		device->SetName(&rtBloom, "rtBloom");
-		device->CreateTexture(&desc, nullptr, &rtBloom_tmp);
-		device->SetName(&rtBloom_tmp, "rtBloom_tmp");
-
-		for (uint32_t i = 0; i < rtBloom.GetDesc().MipLevels; ++i)
-		{
-			int subresource_index;
-			subresource_index = device->CreateSubresource(&rtBloom, SRV, 0, 1, i, 1);
-			assert(subresource_index == i);
-			subresource_index = device->CreateSubresource(&rtBloom_tmp, SRV, 0, 1, i, 1);
-			assert(subresource_index == i);
-			subresource_index = device->CreateSubresource(&rtBloom, UAV, 0, 1, i, 1);
-			assert(subresource_index == i);
-			subresource_index = device->CreateSubresource(&rtBloom_tmp, UAV, 0, 1, i, 1);
-			assert(subresource_index == i);
 		}
 	}
 	{
@@ -261,6 +219,7 @@ void RenderPath3D::ResizeBuffers()
 		uint32_t tileSize = device->GetVariableRateShadingTileSize();
 
 		TextureDesc desc;
+		desc.layout = IMAGE_LAYOUT_UNDEFINED;
 		desc.BindFlags = BIND_UNORDERED_ACCESS;
 		desc.Format = FORMAT_R8_UINT;
 		desc.Width = (internalResolution.x + tileSize - 1) / tileSize;
@@ -291,7 +250,7 @@ void RenderPath3D::ResizeBuffers()
 		device->CreateTexture(&desc, nullptr, &depthBuffer_Main);
 		device->SetName(&depthBuffer_Main, "depthBuffer_Main");
 
-		desc.layout = IMAGE_LAYOUT_GENERAL;
+		desc.layout = IMAGE_LAYOUT_SHADER_RESOURCE_COMPUTE;
 		desc.Format = FORMAT_R32_FLOAT;
 		desc.BindFlags = BIND_SHADER_RESOURCE | BIND_UNORDERED_ACCESS;
 		desc.SampleCount = 1;
@@ -331,6 +290,7 @@ void RenderPath3D::ResizeBuffers()
 		desc.Width = internalResolution.x;
 		desc.Height = internalResolution.y;
 		desc.MipLevels = 6;
+		desc.layout = IMAGE_LAYOUT_SHADER_RESOURCE_COMPUTE;
 		device->CreateTexture(&desc, nullptr, &rtLinearDepth);
 		device->SetName(&rtLinearDepth, "rtLinearDepth");
 
@@ -385,7 +345,7 @@ void RenderPath3D::ResizeBuffers()
 
 		if (device->CheckCapability(GRAPHICSDEVICE_CAPABILITY_VARIABLE_RATE_SHADING_TIER2))
 		{
-			desc.attachments.push_back(RenderPassAttachment::ShadingRateSource(&rtShadingRate));
+			desc.attachments.push_back(RenderPassAttachment::ShadingRateSource(&rtShadingRate, IMAGE_LAYOUT_UNDEFINED, IMAGE_LAYOUT_UNDEFINED));
 		}
 
 		device->CreateRenderPass(&desc, &renderpass_main);
@@ -512,35 +472,6 @@ void RenderPath3D::ResizeBuffers()
 
 
 	// Other resources:
-
-	const XMUINT3 tileCount = wiRenderer::GetEntityCullingTileCount(internalResolution);
-
-	{
-		GPUBufferDesc bd;
-		bd.StructureByteStride = sizeof(XMFLOAT4) * 4; // storing 4 planes for every tile
-		bd.ByteWidth = bd.StructureByteStride * tileCount.x * tileCount.y;
-		bd.BindFlags = BIND_SHADER_RESOURCE | BIND_UNORDERED_ACCESS;
-		bd.MiscFlags = RESOURCE_MISC_BUFFER_STRUCTURED;
-		bd.Usage = USAGE_DEFAULT;
-		bd.CPUAccessFlags = 0;
-		device->CreateBuffer(&bd, nullptr, &tileFrustums);
-
-		device->SetName(&tileFrustums, "tileFrustums");
-	}
-	{
-		GPUBufferDesc bd;
-		bd.StructureByteStride = sizeof(uint);
-		bd.ByteWidth = tileCount.x * tileCount.y * bd.StructureByteStride * SHADER_ENTITY_TILE_BUCKET_COUNT;
-		bd.Usage = USAGE_DEFAULT;
-		bd.BindFlags = BIND_UNORDERED_ACCESS | BIND_SHADER_RESOURCE;
-		bd.CPUAccessFlags = 0;
-		bd.MiscFlags = RESOURCE_MISC_BUFFER_STRUCTURED;
-		device->CreateBuffer(&bd, nullptr, &entityTiles_Opaque);
-		device->CreateBuffer(&bd, nullptr, &entityTiles_Transparent);
-
-		device->SetName(&entityTiles_Opaque, "entityTiles_Opaque");
-		device->SetName(&entityTiles_Transparent, "entityTiles_Transparent");
-	}
 	{
 		TextureDesc desc;
 		desc.Width = internalResolution.x;
@@ -557,6 +488,23 @@ void RenderPath3D::ResizeBuffers()
 		device->CreateTexture(&desc, nullptr, &debugUAV);
 		device->SetName(&debugUAV, "debugUAV");
 	}
+	wiRenderer::CreateTiledLightResources(tiledLightResources, internalResolution);
+	wiRenderer::CreateTiledLightResources(tiledLightResources_planarReflection, internalResolution);
+	wiRenderer::CreateLuminanceResources(luminanceResources, internalResolution);
+	wiRenderer::CreateScreenSpaceShadowResources(screenspaceshadowResources, internalResolution);
+	wiRenderer::CreateDepthOfFieldResources(depthoffieldResources, internalResolution);
+	wiRenderer::CreateMotionBlurResources(motionblurResources, internalResolution);
+	wiRenderer::CreateVolumetricCloudResources(volumetriccloudResources, internalResolution);
+	wiRenderer::CreateBloomResources(bloomResources, internalResolution);
+
+	if (device->CheckCapability(GRAPHICSDEVICE_CAPABILITY_RAYTRACING_INLINE))
+	{
+		wiRenderer::CreateRTShadowResources(rtshadowResources, internalResolution);
+	}
+
+	setAO(ao);
+	setSSREnabled(ssrEnabled);
+	setRaytracedReflectionsEnabled(raytracedReflectionsEnabled);
 
 	RenderPath2D::ResizeBuffers();
 }
@@ -568,9 +516,17 @@ void RenderPath3D::PreUpdate()
 
 void RenderPath3D::Update(float dt)
 {
+	if (rtGbuffer[GBUFFER_COLOR].desc.SampleCount != msaaSampleCount)
+	{
+		ResizeBuffers();
+	}
+
 	RenderPath2D::Update(dt);
 
-	scene->Update(dt * wiRenderer::GetGameSpeed());
+	if (getSceneUpdateEnabled())
+	{
+		scene->Update(dt * wiRenderer::GetGameSpeed());
+	}
 
 	// Frustum culling for main camera:
 	visibility_main.layerMask = getLayerMask();
@@ -592,20 +548,37 @@ void RenderPath3D::Update(float dt)
 		wiRenderer::UpdateVisibility(visibility_reflection);
 	}
 
-	wiRenderer::OcclusionCulling_Read(*scene, visibility_main);
-	wiRenderer::UpdatePerFrameData(*scene, visibility_main, frameCB, GetInternalResolution(), dt);
+	XMUINT2 internalResolution = GetInternalResolution();
+
+	wiRenderer::UpdatePerFrameData(
+		*scene,
+		visibility_main,
+		frameCB,
+		internalResolution,
+		*this,
+		dt
+	);
 
 	if (wiRenderer::GetTemporalAAEnabled())
 	{
 		const XMFLOAT4& halton = wiMath::GetHaltonSequence(wiRenderer::GetDevice()->GetFrameCount() % 256);
-		camera->jitter.x = (halton.x * 2 - 1) / (float)GetInternalResolution().x;
-		camera->jitter.y = (halton.y * 2 - 1) / (float)GetInternalResolution().y;
+		camera->jitter.x = (halton.x * 2 - 1) / (float)internalResolution.x;
+		camera->jitter.y = (halton.y * 2 - 1) / (float)internalResolution.y;
 	}
 	else
 	{
 		camera->jitter = XMFLOAT2(0, 0);
 	}
 	camera->UpdateCamera();
+
+	if (getAO() != AO_RTAO)
+	{
+		rtaoResources.frame = 0;
+	}
+	if (!wiRenderer::GetRaytracedShadowsEnabled())
+	{
+		rtshadowResources.frame = 0;
+	}
 
 	std::swap(depthBuffer_Copy, depthBuffer_Copy1);
 }
@@ -618,8 +591,19 @@ void RenderPath3D::Render() const
 
 	// Preparing the frame:
 	cmd = device->BeginCommandList();
+	CommandList cmd_prepareframe = cmd;
 	wiJobSystem::Execute(ctx, [this, cmd](wiJobArgs args) {
 		RenderFrameSetUp(cmd);
+		});
+
+	// Acceleration structures:
+	//	async compute parallel with depth prepass
+	cmd = device->BeginCommandList(QUEUE_COMPUTE); 
+	device->WaitCommandList(cmd, cmd_prepareframe);
+	wiJobSystem::Execute(ctx, [this, cmd](wiJobArgs args) {
+
+		wiRenderer::UpdateRaytracingAccelerationStructures(*scene, cmd);
+
 		});
 
 	static const uint32_t drawscene_flags =
@@ -632,8 +616,9 @@ void RenderPath3D::Render() const
 		wiRenderer::DRAWSCENE_OPAQUE
 		;
 
-	// Depth prepass + Occlusion culling + AO:
+	// Main camera depth prepass + occlusion culling:
 	cmd = device->BeginCommandList();
+	CommandList cmd_maincamera_prepass = cmd;
 	wiJobSystem::Execute(ctx, [this, cmd](wiJobArgs args) {
 
 		GraphicsDevice* device = wiRenderer::GetDevice();
@@ -660,16 +645,36 @@ void RenderPath3D::Render() const
 		wiProfiler::EndRange(range);
 		device->EventEnd(cmd);
 
-		wiRenderer::OcclusionCulling_Render(*camera, visibility_main, cmd);
+		if (getOcclusionCullingEnabled())
+		{
+			wiRenderer::OcclusionCulling_Render(*camera, visibility_main, cmd);
+		}
 
 		device->RenderPassEnd(cmd);
+
+		});
+
+	// Main camera compute effects:
+	//	(async compute, parallel to "shadow maps" and "update textures",
+	//	must finish before "main scene opaque color pass")
+	cmd = device->BeginCommandList(QUEUE_COMPUTE);
+	device->WaitCommandList(cmd, cmd_maincamera_prepass);
+	CommandList cmd_maincamera_compute_effects = cmd;
+	wiJobSystem::Execute(ctx, [this, cmd](wiJobArgs args) {
+
+		GraphicsDevice* device = wiRenderer::GetDevice();
+
+		wiRenderer::UpdateCameraCB(
+			*camera,
+			camera_previous,
+			camera_reflection,
+			cmd
+		);
 
 		// Create the top mip of depth pyramid from main depth buffer:
 		if (getMSAASampleCount() > 1)
 		{
-
 			wiRenderer::ResolveMSAADepthBuffer(depthBuffer_Copy, depthBuffer_Main, cmd);
-
 		}
 		else
 		{
@@ -691,9 +696,89 @@ void RenderPath3D::Render() const
 			);
 		}
 
+		if (scene->weather.IsVolumetricClouds())
+		{
+			wiRenderer::Postprocess_VolumetricClouds(
+				volumetriccloudResources,
+				rtLinearDepth,
+				depthBuffer_Copy,
+				cmd
+			);
+		}
+
+		{
+			auto range = wiProfiler::BeginRangeGPU("Entity Culling", cmd);
+			wiRenderer::ComputeTiledLightCulling(
+				tiledLightResources,
+				depthBuffer_Copy,
+				debugUAV,
+				cmd
+			);
+			wiProfiler::EndRange(range);
+		}
+
+		RenderSSR(cmd);
+
+		if (wiRenderer::GetScreenSpaceShadowsEnabled())
+		{
+			wiRenderer::Postprocess_ScreenSpaceShadow(
+				screenspaceshadowResources,
+				depthBuffer_Copy,
+				rtLinearDepth,
+				tiledLightResources.entityTiles_Opaque,
+				rtShadow,
+				cmd,
+				getScreenSpaceShadowRange(),
+				getScreenSpaceShadowSampleCount()
+			);
+		}
+
+		if (wiRenderer::GetRaytracedShadowsEnabled())
+		{
+			wiRenderer::Postprocess_RTShadow(
+				rtshadowResources,
+				*scene,
+				depthBuffer_Copy,
+				rtLinearDepth,
+				depthBuffer_Copy1,
+				tiledLightResources.entityTiles_Opaque,
+				GetGbuffer_Read(),
+				rtShadow,
+				cmd
+			);
+		}
+
 		});
 
-	// Planar reflections depth prepass + Light culling:
+	// Shadow maps:
+	if (getShadowsEnabled())
+	{
+		cmd = device->BeginCommandList();
+		wiJobSystem::Execute(ctx, [this, cmd](wiJobArgs args) {
+			wiRenderer::DrawShadowmaps(visibility_main, cmd);
+			});
+	}
+
+	// Updating textures:
+	cmd = device->BeginCommandList();
+	wiJobSystem::Execute(ctx, [cmd, this](wiJobArgs args) {
+		wiRenderer::BindCommonResources(cmd);
+		wiRenderer::RefreshDecalAtlas(*scene, cmd);
+		wiRenderer::RefreshLightmapAtlas(*scene, cmd);
+		wiRenderer::RefreshEnvProbes(visibility_main, cmd);
+		wiRenderer::RefreshImpostors(*scene, cmd);
+		});
+
+	// Voxel GI:
+	if (wiRenderer::GetVoxelRadianceEnabled())
+	{
+		cmd = device->BeginCommandList();
+		wiJobSystem::Execute(ctx, [cmd, this](wiJobArgs args) {
+			wiRenderer::VoxelRadiance(visibility_main, cmd);
+			});
+	}
+
+	// Planar reflections depth prepass:
 	if (visibility_main.IsRequestedPlanarReflections())
 	{
 		cmd = device->BeginCommandList();
@@ -725,47 +810,10 @@ void RenderPath3D::Render() const
 			wiProfiler::EndRange(range); // Planar Reflections
 			device->EventEnd(cmd);
 
-			wiRenderer::ComputeTiledLightCulling(
-				depthBuffer_Reflection,
-				tileFrustums,
-				entityTiles_Opaque,
-				entityTiles_Transparent,
-				debugUAV,
-				cmd
-			);
-
 			});
 	}
 
-	// Shadow maps:
-	if (getShadowsEnabled())
-	{
-		cmd = device->BeginCommandList();
-		wiJobSystem::Execute(ctx, [this, cmd](wiJobArgs args) {
-			wiRenderer::DrawShadowmaps(visibility_main, cmd);
-			});
-	}
-
-	// Updating textures:
-	cmd = device->BeginCommandList();
-	wiJobSystem::Execute(ctx, [cmd, this](wiJobArgs args) {
-		wiRenderer::BindCommonResources(cmd);
-		wiRenderer::RefreshDecalAtlas(*scene, cmd);
-		wiRenderer::RefreshLightmapAtlas(*scene, cmd);
-		wiRenderer::RefreshEnvProbes(visibility_main, cmd);
-		wiRenderer::RefreshImpostors(*scene, cmd);
-		});
-
-	// Voxel GI:
-	if (wiRenderer::GetVoxelRadianceEnabled())
-	{
-		cmd = device->BeginCommandList();
-		wiJobSystem::Execute(ctx, [cmd, this](wiJobArgs args) {
-			wiRenderer::VoxelRadiance(visibility_main, cmd);
-			});
-	}
-
-	// Planar reflections:
+	// Planar reflections opaque color pass:
 	if (visibility_main.IsRequestedPlanarReflections())
 	{
 		cmd = device->BeginCommandList();
@@ -780,6 +828,13 @@ void RenderPath3D::Render() const
 				cmd
 			);
 
+			wiRenderer::ComputeTiledLightCulling(
+				tiledLightResources_planarReflection,
+				depthBuffer_Reflection,
+				Texture(),
+				cmd
+			);
+
 			device->EventBegin("Planar reflections", cmd);
 			auto range = wiProfiler::BeginRangeGPU("Planar Reflections", cmd);
 
@@ -788,15 +843,11 @@ void RenderPath3D::Render() const
 			vp.Height = (float)depthBuffer_Reflection.GetDesc().Height;
 			device->BindViewports(1, &vp, cmd);
 
-			GPUBarrier barriers[] = {
-				GPUBarrier::Memory(&entityTiles_Opaque),
-			};
-			device->Barrier(barriers, arraysize(barriers), cmd);
 			device->UnbindResources(TEXSLOT_DEPTH, 1, cmd);
 
 			device->RenderPassBegin(&renderpass_reflection, cmd);
 
-			device->BindResource(PS, &entityTiles_Opaque, TEXSLOT_RENDERPATH_ENTITYTILES, cmd);
+			device->BindResource(PS, &tiledLightResources_planarReflection.entityTiles_Opaque, TEXSLOT_RENDERPATH_ENTITYTILES, cmd);
 			device->BindResource(PS, wiTextureHelper::getTransparent(), TEXSLOT_RENDERPATH_REFLECTION, cmd);
 			device->BindResource(PS, wiTextureHelper::getWhite(), TEXSLOT_RENDERPATH_AO, cmd);
 			device->BindResource(PS, wiTextureHelper::getTransparent(), TEXSLOT_RENDERPATH_SSR, cmd);
@@ -811,11 +862,13 @@ void RenderPath3D::Render() const
 			});
 	}
 
-	// Lighting effects:
+	// Main camera opaque color pass:
 	cmd = device->BeginCommandList();
+	device->WaitCommandList(cmd, cmd_maincamera_compute_effects);
 	wiJobSystem::Execute(ctx, [this, cmd](wiJobArgs args) {
 
 		GraphicsDevice* device = wiRenderer::GetDevice();
+		device->EventBegin("Opaque Scene", cmd);
 
 		wiRenderer::UpdateCameraCB(
 			*camera,
@@ -824,60 +877,20 @@ void RenderPath3D::Render() const
 			cmd
 		);
 
+		// This can't run in "main camera compute effects" async compute,
+		//	because it depends on shadow maps, and envmaps
+		if (getRaytracedReflectionEnabled())
 		{
-			auto range = wiProfiler::BeginRangeGPU("Entity Culling", cmd);
-			wiRenderer::ComputeTiledLightCulling(
-				depthBuffer_Copy,
-				tileFrustums,
-				entityTiles_Opaque,
-				entityTiles_Transparent,
-				debugUAV,
-				cmd
-			);
-			GPUBarrier barriers[] = {
-				GPUBarrier::Memory(&entityTiles_Opaque),
-			};
-			device->Barrier(barriers, arraysize(barriers), cmd);
-			wiProfiler::EndRange(range);
-		}
-
-		RenderSSR(cmd);
-
-		if (wiRenderer::GetScreenSpaceShadowsEnabled())
-		{
-			wiRenderer::Postprocess_ScreenSpaceShadow(
-				depthBuffer_Copy,
-				rtLinearDepth,
-				entityTiles_Opaque,
-				rtShadow,
-				cmd,
-				getScreenSpaceShadowRange(),
-				getScreenSpaceShadowSampleCount()
-			);
-		}
-
-		if (wiRenderer::GetRaytracedShadowsEnabled())
-		{
-			wiRenderer::Postprocess_RTShadow(
+			wiRenderer::Postprocess_RTReflection(
+				rtreflectionResources,
 				*scene,
 				depthBuffer_Copy,
-				rtLinearDepth,
 				depthBuffer_Copy1,
-				entityTiles_Opaque,
 				GetGbuffer_Read(),
-				rtShadow,
+				rtSSR,
 				cmd
 			);
 		}
-
-		});
-
-	// Opaque scene:
-	cmd = device->BeginCommandList();
-	wiJobSystem::Execute(ctx, [this, cmd](wiJobArgs args) {
-
-		GraphicsDevice* device = wiRenderer::GetDevice();
-		device->EventBegin("Opaque Scene", cmd);
 
 		device->RenderPassBegin(&renderpass_main, cmd);
 
@@ -890,6 +903,8 @@ void RenderPath3D::Render() const
 
 		if (wiRenderer::GetRaytracedShadowsEnabled() || wiRenderer::GetScreenSpaceShadowsEnabled())
 		{
+			GPUBarrier barrier = GPUBarrier::Image(&rtShadow, rtShadow.desc.layout, IMAGE_LAYOUT_SHADER_RESOURCE);
+			device->Barrier(&barrier, 1, cmd);
 			device->BindResource(PS, &rtShadow, TEXSLOT_RENDERPATH_RTSHADOW, cmd);
 		}
 		else
@@ -897,7 +912,7 @@ void RenderPath3D::Render() const
 			device->BindResource(PS, wiTextureHelper::getUINT4(), TEXSLOT_RENDERPATH_RTSHADOW, cmd);
 		}
 
-		device->BindResource(PS, &entityTiles_Opaque, TEXSLOT_RENDERPATH_ENTITYTILES, cmd);
+		device->BindResource(PS, &tiledLightResources.entityTiles_Opaque, TEXSLOT_RENDERPATH_ENTITYTILES, cmd);
 		device->BindResource(PS, getReflectionsEnabled() ? &rtReflection : wiTextureHelper::getTransparent(), TEXSLOT_RENDERPATH_REFLECTION, cmd);
 		device->BindResource(PS, getAOEnabled() ? &rtAO : wiTextureHelper::getWhite(), TEXSLOT_RENDERPATH_AO, cmd);
 		device->BindResource(PS, getSSREnabled() || getRaytracedReflectionEnabled() ? &rtSSR : wiTextureHelper::getTransparent(), TEXSLOT_RENDERPATH_SSR, cmd);
@@ -908,7 +923,27 @@ void RenderPath3D::Render() const
 
 		RenderOutline(cmd);
 
+		// Upsample + Blend the volumetric clouds on top:
+		if (scene->weather.IsVolumetricClouds())
+		{
+			device->EventBegin("Volumetric Clouds Upsample + Blend", cmd);
+			wiRenderer::Postprocess_Upsample_Bilateral(
+				volumetriccloudResources.texture_reproject[device->GetFrameCount() % 2],
+				rtLinearDepth,
+				*GetGbuffer_Read(GBUFFER_COLOR), // only desc is taken if pixel shader upsampling is used
+				cmd,
+				true // pixel shader upsampling
+			);
+			device->EventEnd(cmd);
+		}
+
 		device->RenderPassEnd(cmd);
+
+		if (wiRenderer::GetRaytracedShadowsEnabled() || wiRenderer::GetScreenSpaceShadowsEnabled())
+		{
+			GPUBarrier barrier = GPUBarrier::Image(&rtShadow, IMAGE_LAYOUT_SHADER_RESOURCE, rtShadow.desc.layout);
+			device->Barrier(&barrier, 1, cmd);
+		}
 
 		device->EventEnd(cmd);
 		});
@@ -958,7 +993,9 @@ void RenderPath3D::Compose(CommandList cmd) const
 
 	if (wiRenderer::GetDebugLightCulling() || wiRenderer::GetVariableRateShadingClassificationDebug())
 	{
-		wiImage::Draw(&debugUAV, wiImageParams((float)wiRenderer::GetDevice()->GetScreenWidth(), (float)wiRenderer::GetDevice()->GetScreenHeight()), cmd);
+		fx.enableFullScreen();
+		fx.blendFlag = BLENDMODE_PREMULTIPLIED;
+		wiImage::Draw(&debugUAV, fx, cmd);
 	}
 
 	RenderPath2D::Compose(cmd);
@@ -970,11 +1007,6 @@ void RenderPath3D::RenderFrameSetUp(CommandList cmd) const
 
 	device->BindResource(CS, &depthBuffer_Copy1, TEXSLOT_DEPTH, cmd);
 	wiRenderer::UpdateRenderData(visibility_main, frameCB, cmd);
-
-	if (getAO() == AO_RTAO || wiRenderer::GetRaytracedShadowsEnabled() || getRaytracedReflectionEnabled())
-	{
-		wiRenderer::UpdateRaytracingAccelerationStructures(*scene, cmd);
-	}
 }
 
 void RenderPath3D::RenderAO(CommandList cmd) const
@@ -987,6 +1019,7 @@ void RenderPath3D::RenderAO(CommandList cmd) const
 		{
 		case AO_SSAO:
 			wiRenderer::Postprocess_SSAO(
+				ssaoResources,
 				depthBuffer_Copy,
 				rtLinearDepth,
 				rtAO,
@@ -998,6 +1031,7 @@ void RenderPath3D::RenderAO(CommandList cmd) const
 			break;
 		case AO_HBAO:
 			wiRenderer::Postprocess_HBAO(
+				ssaoResources,
 				*camera,
 				rtLinearDepth,
 				rtAO,
@@ -1007,6 +1041,7 @@ void RenderPath3D::RenderAO(CommandList cmd) const
 			break;
 		case AO_MSAO:
 			wiRenderer::Postprocess_MSAO(
+				msaoResources,
 				*camera,
 				rtLinearDepth,
 				rtAO,
@@ -1016,6 +1051,7 @@ void RenderPath3D::RenderAO(CommandList cmd) const
 			break;
 		case AO_RTAO:
 			wiRenderer::Postprocess_RTAO(
+				rtaoResources,
 				*scene,
 				depthBuffer_Copy,
 				rtLinearDepth,
@@ -1024,7 +1060,6 @@ void RenderPath3D::RenderAO(CommandList cmd) const
 				rtAO,
 				cmd,
 				getAORange(),
-				getAOSampleCount(),
 				getAOPower()
 			);
 			break;
@@ -1033,20 +1068,10 @@ void RenderPath3D::RenderAO(CommandList cmd) const
 }
 void RenderPath3D::RenderSSR(CommandList cmd) const
 {
-	if (getRaytracedReflectionEnabled())
-	{
-		wiRenderer::Postprocess_RTReflection(
-			*scene,
-			depthBuffer_Copy,
-			depthBuffer_Copy1,
-			GetGbuffer_Read(),
-			rtSSR, 
-			cmd
-		);
-	}
-	else if (getSSREnabled())
+	if (getSSREnabled() && !getRaytracedReflectionEnabled())
 	{
 		wiRenderer::Postprocess_SSR(
+			ssrResources,
 			rtSceneCopy, 
 			depthBuffer_Copy, 
 			rtLinearDepth,
@@ -1084,6 +1109,16 @@ void RenderPath3D::RenderLightShafts(CommandList cmd) const
 			device->BindViewports(1, &vp, cmd);
 
 			wiRenderer::DrawSun(cmd);
+
+			if (scene->weather.IsVolumetricClouds())
+			{
+				device->EventBegin("Volumetric cloud occlusion mask", cmd);
+				wiImageParams fx;
+				fx.enableFullScreen();
+				fx.blendFlag = BLENDMODE_MULTIPLY;
+				wiImage::Draw(&volumetriccloudResources.texture_cloudMask, fx, cmd);
+				device->EventEnd(cmd);
+			}
 
 			device->RenderPassEnd(cmd);
 		}
@@ -1167,7 +1202,7 @@ void RenderPath3D::RenderTransparents(CommandList cmd) const
 	GraphicsDevice* device = wiRenderer::GetDevice();
 
 	// Water ripple rendering:
-	if(wiRenderer::IsWaterrippleRendering())
+	if(!scene->waterRipples.empty())
 	{
 		device->RenderPassBegin(&renderpass_waterripples, cmd);
 
@@ -1184,11 +1219,6 @@ void RenderPath3D::RenderTransparents(CommandList cmd) const
 	device->UnbindResources(TEXSLOT_GBUFFER0, 1, cmd);
 	device->UnbindResources(TEXSLOT_ONDEMAND0, TEXSLOT_ONDEMAND_COUNT, cmd);
 
-	GPUBarrier barriers[] = {
-		GPUBarrier::Memory(&entityTiles_Transparent),
-	};
-	device->Barrier(barriers, arraysize(barriers), cmd);
-
 	device->RenderPassBegin(&renderpass_transparent, cmd);
 
 	Viewport vp;
@@ -1201,7 +1231,7 @@ void RenderPath3D::RenderTransparents(CommandList cmd) const
 		auto range = wiProfiler::BeginRangeGPU("Transparent Scene", cmd);
 		device->EventBegin("Transparent Scene", cmd);
 
-		device->BindResource(PS, &entityTiles_Transparent, TEXSLOT_RENDERPATH_ENTITYTILES, cmd);
+		device->BindResource(PS, &tiledLightResources.entityTiles_Transparent, TEXSLOT_RENDERPATH_ENTITYTILES, cmd);
 		device->BindResource(PS, &rtLinearDepth, TEXSLOT_LINEARDEPTH, cmd);
 		device->BindResource(PS, getReflectionsEnabled() ? &rtReflection : wiTextureHelper::getTransparent(), TEXSLOT_RENDERPATH_REFLECTION, cmd);
 		device->BindResource(PS, &rtSceneCopy, TEXSLOT_RENDERPATH_REFRACTION, cmd);
@@ -1211,6 +1241,7 @@ void RenderPath3D::RenderTransparents(CommandList cmd) const
 		drawscene_flags |= wiRenderer::DRAWSCENE_TRANSPARENT;
 		drawscene_flags |= wiRenderer::DRAWSCENE_OCCLUSIONCULLING;
 		drawscene_flags |= wiRenderer::DRAWSCENE_HAIRPARTICLE;
+		drawscene_flags |= wiRenderer::DRAWSCENE_TESSELLATION;
 		wiRenderer::DrawScene(visibility_main, RENDERPASS_MAIN, cmd, drawscene_flags);
 
 		device->EventEnd(cmd);
@@ -1244,7 +1275,7 @@ void RenderPath3D::RenderTransparents(CommandList cmd) const
 		wiRenderer::DrawLensFlares(visibility_main, depthBuffer_Copy, cmd);
 	}
 
-	wiRenderer::DrawDebugWorld(*scene, *camera, cmd);
+	wiRenderer::DrawDebugWorld(*scene, *camera, *this, cmd);
 
 	device->RenderPassEnd(cmd);
 
@@ -1272,20 +1303,6 @@ void RenderPath3D::RenderPostprocessChain(CommandList cmd) const
 
 	// 1.) HDR post process chain
 	{
-		if (getVolumetricCloudsEnabled())
-		{
-			wiRenderer::Postprocess_VolumetricClouds(
-				*rt_read,
-				*rt_write,
-				rtLinearDepth,
-				depthBuffer_Copy,
-				cmd
-			);
-			
-			std::swap(rt_read, rt_write);
-			device->UnbindResources(TEXSLOT_ONDEMAND0, 1, cmd);
-		}
-
 		if (wiRenderer::GetTemporalAAEnabled() && !wiRenderer::GetTemporalAADebugEnabled())
 		{
 			GraphicsDevice* device = wiRenderer::GetDevice();
@@ -1303,16 +1320,15 @@ void RenderPath3D::RenderPostprocessChain(CommandList cmd) const
 			rt_first = &rtTemporalAA[output];
 		}
 
-		if (getDepthOfFieldEnabled())
+		if (getDepthOfFieldEnabled() && camera->aperture_size > 0 && getDepthOfFieldStrength() > 0)
 		{
 			wiRenderer::Postprocess_DepthOfField(
+				depthoffieldResources,
 				rt_first == nullptr ? *rt_read : *rt_first,
 				*rt_write,
 				rtLinearDepth,
 				cmd,
-				getDepthOfFieldFocus(),
-				getDepthOfFieldStrength(),
-				getDepthOfFieldAspect()
+				getDepthOfFieldStrength()
 			);
 			rt_first = nullptr;
 
@@ -1320,9 +1336,10 @@ void RenderPath3D::RenderPostprocessChain(CommandList cmd) const
 			device->UnbindResources(TEXSLOT_ONDEMAND0, 1, cmd);
 		}
 
-		if (getMotionBlurEnabled())
+		if (getMotionBlurEnabled() && getMotionBlurStrength() > 0)
 		{
 			wiRenderer::Postprocess_MotionBlur(
+				motionblurResources,
 				rt_first == nullptr ? *rt_read : *rt_first,
 				rtLinearDepth,
 				GetGbuffer_Read(),
@@ -1338,7 +1355,13 @@ void RenderPath3D::RenderPostprocessChain(CommandList cmd) const
 
 		if (getBloomEnabled())
 		{
-			wiRenderer::Postprocess_Bloom(rt_first == nullptr ? *rt_read : *rt_first, rtBloom, rtBloom_tmp, *rt_write, cmd, getBloomThreshold());
+			wiRenderer::Postprocess_Bloom(
+				bloomResources,
+				rt_first == nullptr ? *rt_read : *rt_first,
+				*rt_write,
+				cmd,
+				getBloomThreshold()
+			);
 			rt_first = nullptr;
 
 			std::swap(rt_read, rt_write);
@@ -1352,13 +1375,14 @@ void RenderPath3D::RenderPostprocessChain(CommandList cmd) const
 
 		wiRenderer::Postprocess_Tonemap(
 			rt_first == nullptr ? *rt_read : *rt_first,
-			getEyeAdaptionEnabled() ? *wiRenderer::ComputeLuminance(*GetGbuffer_Read(GBUFFER_COLOR), cmd) : *wiTextureHelper::getColor(wiColor::Gray()),
-			getMSAASampleCount() > 1 ? rtParticleDistortion_Resolved : rtParticleDistortion,
 			*rt_write,
 			cmd,
 			getExposure(),
 			getDitherEnabled(),
-			getColorGradingEnabled() ? colorGradingTex->texture : nullptr
+			getColorGradingEnabled() ? (scene->weather.colorGradingMap == nullptr ? nullptr : &scene->weather.colorGradingMap->texture) : nullptr,
+			getMSAASampleCount() > 1 ? &rtParticleDistortion_Resolved : &rtParticleDistortion,
+			getEyeAdaptionEnabled() ? wiRenderer::ComputeLuminance(luminanceResources, *GetGbuffer_Read(GBUFFER_COLOR), cmd, getEyeAdaptionRate()) : nullptr,
+			getEyeAdaptionKey()
 		);
 
 		rt_first = nullptr;
@@ -1406,3 +1430,100 @@ void RenderPath3D::RenderPostprocessChain(CommandList cmd) const
 	}
 }
 
+void RenderPath3D::setAO(AO value)
+{
+	ao = value;
+
+	rtAO = {};
+	ssaoResources = {};
+	msaoResources = {};
+	rtaoResources = {};
+
+	if (ao == AO_DISABLED)
+	{
+		return;
+	}
+
+	XMUINT2 internalResolution = GetInternalResolution();
+
+	TextureDesc desc;
+	desc.BindFlags = BIND_SHADER_RESOURCE | BIND_UNORDERED_ACCESS;
+	desc.Format = FORMAT_R8_UNORM;
+	desc.layout = IMAGE_LAYOUT_SHADER_RESOURCE_COMPUTE;
+
+	switch (ao)
+	{
+	case RenderPath3D::AO_SSAO:
+	case RenderPath3D::AO_HBAO:
+		desc.Width = internalResolution.x / 2;
+		desc.Height = internalResolution.y / 2;
+		wiRenderer::CreateSSAOResources(ssaoResources, internalResolution);
+		break;
+	case RenderPath3D::AO_MSAO:
+		desc.Width = internalResolution.x;
+		desc.Height = internalResolution.y;
+		wiRenderer::CreateMSAOResources(msaoResources, internalResolution);
+		break;
+	case RenderPath3D::AO_RTAO:
+		desc.Width = internalResolution.x / 2;
+		desc.Height = internalResolution.y / 2;
+		wiRenderer::CreateRTAOResources(rtaoResources, internalResolution);
+		break;
+	default:
+		break;
+	}
+
+	GraphicsDevice* device = wiRenderer::GetDevice();
+	device->CreateTexture(&desc, nullptr, &rtAO);
+	device->SetName(&rtAO, "rtAO");
+}
+
+void RenderPath3D::setSSREnabled(bool value)
+{
+	ssrEnabled = value;
+
+	if (value)
+	{
+		GraphicsDevice* device = wiRenderer::GetDevice();
+		XMUINT2 internalResolution = GetInternalResolution();
+
+		TextureDesc desc;
+		desc.BindFlags = BIND_SHADER_RESOURCE | BIND_UNORDERED_ACCESS;
+		desc.Format = FORMAT_R16G16B16A16_FLOAT;
+		desc.Width = internalResolution.x / 2;
+		desc.Height = internalResolution.y / 2;
+		device->CreateTexture(&desc, nullptr, &rtSSR);
+		device->SetName(&rtSSR, "rtSSR");
+
+		wiRenderer::CreateSSRResources(ssrResources, internalResolution);
+	}
+	else
+	{
+		ssrResources = {};
+	}
+}
+
+void RenderPath3D::setRaytracedReflectionsEnabled(bool value)
+{
+	raytracedReflectionsEnabled = value;
+
+	if (value)
+	{
+		GraphicsDevice* device = wiRenderer::GetDevice();
+		XMUINT2 internalResolution = GetInternalResolution();
+
+		TextureDesc desc;
+		desc.BindFlags = BIND_SHADER_RESOURCE | BIND_UNORDERED_ACCESS;
+		desc.Format = FORMAT_R11G11B10_FLOAT;
+		desc.Width = internalResolution.x / 2;
+		desc.Height = internalResolution.y / 2;
+		device->CreateTexture(&desc, nullptr, &rtSSR);
+		device->SetName(&rtSSR, "rtSSR");
+
+		wiRenderer::CreateRTReflectionResources(rtreflectionResources, internalResolution);
+	}
+	else
+	{
+		rtreflectionResources = {};
+	}
+}

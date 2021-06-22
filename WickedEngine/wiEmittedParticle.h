@@ -2,7 +2,7 @@
 #include "CommonInclude.h"
 #include "wiGraphicsDevice.h"
 #include "wiIntersect.h"
-#include "ShaderInterop_EmittedParticle.h"
+#include "shaders/ShaderInterop_EmittedParticle.h"
 #include "wiEnums.h"
 #include "wiScene_Decl.h"
 #include "wiECS.h"
@@ -23,7 +23,7 @@ public:
 	{
 		SOFT,
 		SOFT_DISTORTION,
-		SIMPLEST,
+		SIMPLE,
 		SOFT_LIGHTING,
 		PARTICLESHADERTYPE_COUNT,
 		ENUM_FORCE_UINT32 = 0xFFFFFFFF,
@@ -31,7 +31,7 @@ public:
 
 private:
 	ParticleCounters statistics = {};
-	wiGraphics::GPUBuffer statisticsReadbackBuffer[wiGraphics::GraphicsDevice::GetBackBufferCount() + 2];
+	wiGraphics::GPUBuffer statisticsReadbackBuffer[wiGraphics::GraphicsDevice::GetBufferCount() + 3];
 
 	wiGraphics::GPUBuffer particleBuffer;
 	wiGraphics::GPUBuffer aliveList[2];
@@ -64,16 +64,16 @@ public:
 
 	enum FLAGS
 	{
-		EMPTY = 0,
-		DEBUG = 1 << 0,
-		PAUSED = 1 << 1,
-		SORTING = 1 << 2,
-		DEPTHCOLLISION = 1 << 3,
-		SPH_FLUIDSIMULATION = 1 << 4,
-		HAS_VOLUME = 1 << 5,
-		FRAME_BLENDING = 1 << 6,
+		FLAG_EMPTY = 0,
+		FLAG_DEBUG = 1 << 0,
+		FLAG_PAUSED = 1 << 1,
+		FLAG_SORTING = 1 << 2,
+		FLAG_DEPTHCOLLISION = 1 << 3,
+		FLAG_SPH_FLUIDSIMULATION = 1 << 4,
+		FLAG_HAS_VOLUME = 1 << 5,
+		FLAG_FRAME_BLENDING = 1 << 6,
 	};
-	uint32_t _flags = EMPTY;
+	uint32_t _flags = FLAG_EMPTY;
 
 	PARTICLESHADERTYPE shaderType = SOFT;
 
@@ -92,6 +92,11 @@ public:
 	float rotation = 0.0f;
 	float motionBlurAmount = 0.0f;
 	float mass = 1.0f;
+	float random_color = 0;
+
+	XMFLOAT3 velocity = {}; // starting velocity of all new particles
+	XMFLOAT3 gravity = {}; // constant gravity force
+	float drag = 1.0f; // constant drag (per frame velocity multiplier, reducing it will make particles slow down over time)
 
 	float SPH_h = 1.0f;		// smoothing radius
 	float SPH_K = 250.0f;	// pressure constant
@@ -112,22 +117,23 @@ public:
 	// Non-serialized attributes:
 	XMFLOAT3 center;
 	uint32_t statisticsReadBackIndex = 0;
+	uint32_t layerMask = ~0u;
 
-	inline bool IsDebug() const { return _flags & DEBUG; }
-	inline bool IsPaused() const { return _flags & PAUSED; }
-	inline bool IsSorted() const { return _flags & SORTING; }
-	inline bool IsDepthCollisionEnabled() const { return _flags & DEPTHCOLLISION; }
-	inline bool IsSPHEnabled() const { return _flags & SPH_FLUIDSIMULATION; }
-	inline bool IsVolumeEnabled() const { return _flags & HAS_VOLUME; }
-	inline bool IsFrameBlendingEnabled() const { return _flags & FRAME_BLENDING; }
+	inline bool IsDebug() const { return _flags & FLAG_DEBUG; }
+	inline bool IsPaused() const { return _flags & FLAG_PAUSED; }
+	inline bool IsSorted() const { return _flags & FLAG_SORTING; }
+	inline bool IsDepthCollisionEnabled() const { return _flags & FLAG_DEPTHCOLLISION; }
+	inline bool IsSPHEnabled() const { return _flags & FLAG_SPH_FLUIDSIMULATION; }
+	inline bool IsVolumeEnabled() const { return _flags & FLAG_HAS_VOLUME; }
+	inline bool IsFrameBlendingEnabled() const { return _flags & FLAG_FRAME_BLENDING; }
 
-	inline void SetDebug(bool value) { if (value) { _flags |= DEBUG; } else { _flags &= ~DEBUG; } }
-	inline void SetPaused(bool value) { if (value) { _flags |= PAUSED; } else { _flags &= ~PAUSED; } }
-	inline void SetSorted(bool value) { if (value) { _flags |= SORTING; } else { _flags &= ~SORTING; } }
-	inline void SetDepthCollisionEnabled(bool value) { if (value) { _flags |= DEPTHCOLLISION; } else { _flags &= ~DEPTHCOLLISION; } }
-	inline void SetSPHEnabled(bool value) { if (value) { _flags |= SPH_FLUIDSIMULATION; } else { _flags &= ~SPH_FLUIDSIMULATION; } }
-	inline void SetVolumeEnabled(bool value) { if (value) { _flags |= HAS_VOLUME; } else { _flags &= ~HAS_VOLUME; } }
-	inline void SetFrameBlendingEnabled(bool value) { if (value) { _flags |= FRAME_BLENDING; } else { _flags &= ~FRAME_BLENDING; } }
+	inline void SetDebug(bool value) { if (value) { _flags |= FLAG_DEBUG; } else { _flags &= ~FLAG_DEBUG; } }
+	inline void SetPaused(bool value) { if (value) { _flags |= FLAG_PAUSED; } else { _flags &= ~FLAG_PAUSED; } }
+	inline void SetSorted(bool value) { if (value) { _flags |= FLAG_SORTING; } else { _flags &= ~FLAG_SORTING; } }
+	inline void SetDepthCollisionEnabled(bool value) { if (value) { _flags |= FLAG_DEPTHCOLLISION; } else { _flags &= ~FLAG_DEPTHCOLLISION; } }
+	inline void SetSPHEnabled(bool value) { if (value) { _flags |= FLAG_SPH_FLUIDSIMULATION; } else { _flags &= ~FLAG_SPH_FLUIDSIMULATION; } }
+	inline void SetVolumeEnabled(bool value) { if (value) { _flags |= FLAG_HAS_VOLUME; } else { _flags &= ~FLAG_HAS_VOLUME; } }
+	inline void SetFrameBlendingEnabled(bool value) { if (value) { _flags |= FLAG_FRAME_BLENDING; } else { _flags &= ~FLAG_FRAME_BLENDING; } }
 
 	void Serialize(wiArchive& archive, wiECS::EntitySerializer& seri);
 

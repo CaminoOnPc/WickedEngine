@@ -426,8 +426,8 @@ namespace Vulkan_Internal
 	{
 		switch (value)
 		{
-		case wiGraphics::IMAGE_LAYOUT_GENERAL:
-			return VK_IMAGE_LAYOUT_GENERAL;
+		case wiGraphics::IMAGE_LAYOUT_UNDEFINED:
+			return VK_IMAGE_LAYOUT_UNDEFINED;
 		case wiGraphics::IMAGE_LAYOUT_RENDERTARGET:
 			return VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 		case wiGraphics::IMAGE_LAYOUT_DEPTHSTENCIL:
@@ -435,6 +435,7 @@ namespace Vulkan_Internal
 		case wiGraphics::IMAGE_LAYOUT_DEPTHSTENCIL_READONLY:
 			return VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
 		case wiGraphics::IMAGE_LAYOUT_SHADER_RESOURCE:
+		case wiGraphics::IMAGE_LAYOUT_SHADER_RESOURCE_COMPUTE:
 			return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 		case wiGraphics::IMAGE_LAYOUT_UNORDERED_ACCESS:
 			return VK_IMAGE_LAYOUT_GENERAL;
@@ -479,13 +480,7 @@ namespace Vulkan_Internal
 
 		switch (value)
 		{
-		case wiGraphics::IMAGE_LAYOUT_GENERAL:
-			flags |= VK_ACCESS_SHADER_READ_BIT;
-			flags |= VK_ACCESS_SHADER_WRITE_BIT;
-			flags |= VK_ACCESS_TRANSFER_READ_BIT;
-			flags |= VK_ACCESS_TRANSFER_WRITE_BIT;
-			flags |= VK_ACCESS_MEMORY_READ_BIT;
-			flags |= VK_ACCESS_MEMORY_WRITE_BIT;
+		case wiGraphics::IMAGE_LAYOUT_UNDEFINED:
 			break;
 		case wiGraphics::IMAGE_LAYOUT_RENDERTARGET:
 			flags |= VK_ACCESS_SHADER_WRITE_BIT;
@@ -497,6 +492,7 @@ namespace Vulkan_Internal
 			flags |= VK_ACCESS_SHADER_READ_BIT;
 			break;
 		case wiGraphics::IMAGE_LAYOUT_SHADER_RESOURCE:
+		case wiGraphics::IMAGE_LAYOUT_SHADER_RESOURCE_COMPUTE:
 			flags |= VK_ACCESS_SHADER_READ_BIT;
 			break;
 		case wiGraphics::IMAGE_LAYOUT_UNORDERED_ACCESS:
@@ -519,19 +515,7 @@ namespace Vulkan_Internal
 
 		switch (value)
 		{
-		case wiGraphics::BUFFER_STATE_GENERAL:
-			flags |= VK_ACCESS_SHADER_READ_BIT;
-			flags |= VK_ACCESS_SHADER_WRITE_BIT;
-			flags |= VK_ACCESS_TRANSFER_READ_BIT;
-			flags |= VK_ACCESS_TRANSFER_WRITE_BIT;
-			flags |= VK_ACCESS_HOST_READ_BIT;
-			flags |= VK_ACCESS_HOST_WRITE_BIT;
-			flags |= VK_ACCESS_MEMORY_READ_BIT;
-			flags |= VK_ACCESS_MEMORY_WRITE_BIT;
-			flags |= VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
-			flags |= VK_ACCESS_INDEX_READ_BIT;
-			flags |= VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
-			flags |= VK_ACCESS_UNIFORM_READ_BIT;
+		case wiGraphics::BUFFER_STATE_UNDEFINED:
 			break;
 		case wiGraphics::BUFFER_STATE_VERTEX_BUFFER:
 			flags |= VK_ACCESS_SHADER_READ_BIT;
@@ -550,6 +534,7 @@ namespace Vulkan_Internal
 			flags |= VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
 			break;
 		case wiGraphics::BUFFER_STATE_SHADER_RESOURCE:
+		case wiGraphics::BUFFER_STATE_SHADER_RESOURCE_COMPUTE:
 			flags |= VK_ACCESS_SHADER_READ_BIT;
 			flags |= VK_ACCESS_UNIFORM_READ_BIT;
 			break;
@@ -640,6 +625,7 @@ namespace Vulkan_Internal
 		return VK_FALSE;
 	}
 
+
 	// Memory tools:
 
 	inline size_t Align(size_t uLocation, size_t uAlign)
@@ -658,12 +644,17 @@ namespace Vulkan_Internal
 		std::shared_ptr<GraphicsDevice_Vulkan::AllocationHandler> allocationhandler;
 		VmaAllocation allocation = nullptr;
 		VkBuffer resource = VK_NULL_HANDLE;
-		VkBufferView cbv = VK_NULL_HANDLE;
+		int cbv_index = -1;
 		VkBufferView srv = VK_NULL_HANDLE;
+		int srv_index = -1;
 		VkBufferView uav = VK_NULL_HANDLE;
+		int uav_index = -1;
 		std::vector<VkBufferView> subresources_srv;
+		std::vector<int> subresources_srv_index;
 		std::vector<VkBufferView> subresources_uav;
+		std::vector<int> subresources_uav_index;
 		VkDeviceAddress address = 0;
+		bool is_typedbuffer = false;
 
 		GraphicsDevice::GPUAllocation dynamic[COMMANDLIST_COUNT];
 
@@ -674,7 +665,6 @@ namespace Vulkan_Internal
 			allocationhandler->destroylocker.lock();
 			uint64_t framecount = allocationhandler->framecount;
 			if (resource) allocationhandler->destroyer_buffers.push_back(std::make_pair(std::make_pair(resource, allocation), framecount));
-			if (cbv) allocationhandler->destroyer_bufferviews.push_back(std::make_pair(cbv, framecount));
 			if (srv) allocationhandler->destroyer_bufferviews.push_back(std::make_pair(srv, framecount));
 			if (uav) allocationhandler->destroyer_bufferviews.push_back(std::make_pair(uav, framecount));
 			for (auto x : subresources_srv)
@@ -684,6 +674,33 @@ namespace Vulkan_Internal
 			for (auto x : subresources_uav)
 			{
 				allocationhandler->destroyer_bufferviews.push_back(std::make_pair(x, framecount));
+			}
+			if (cbv_index >= 0) allocationhandler->destroyer_bindlessUniformBuffers.push_back(std::make_pair(cbv_index, framecount));
+			if (is_typedbuffer)
+			{
+				if (srv_index >= 0) allocationhandler->destroyer_bindlessUniformTexelBuffers.push_back(std::make_pair(srv_index, framecount));
+				if (uav_index >= 0) allocationhandler->destroyer_bindlessStorageTexelBuffers.push_back(std::make_pair(uav_index, framecount));
+				for (auto x : subresources_srv_index)
+				{
+					if (x >= 0) allocationhandler->destroyer_bindlessUniformTexelBuffers.push_back(std::make_pair(x, framecount));
+				}
+				for (auto x : subresources_uav_index)
+				{
+					if (x >= 0) allocationhandler->destroyer_bindlessStorageTexelBuffers.push_back(std::make_pair(x, framecount));
+				}
+			}
+			else
+			{
+				if (srv_index >= 0) allocationhandler->destroyer_bindlessStorageBuffers.push_back(std::make_pair(srv_index, framecount));
+				if (uav_index >= 0) allocationhandler->destroyer_bindlessStorageBuffers.push_back(std::make_pair(uav_index, framecount));
+				for (auto x : subresources_srv_index)
+				{
+					if (x >= 0) allocationhandler->destroyer_bindlessStorageBuffers.push_back(std::make_pair(x, framecount));
+				}
+				for (auto x : subresources_uav_index)
+				{
+					if (x >= 0) allocationhandler->destroyer_bindlessStorageBuffers.push_back(std::make_pair(x, framecount));
+				}
 			}
 			allocationhandler->destroylocker.unlock();
 		}
@@ -695,12 +712,16 @@ namespace Vulkan_Internal
 		VkImage resource = VK_NULL_HANDLE;
 		VkBuffer staging_resource = VK_NULL_HANDLE;
 		VkImageView srv = VK_NULL_HANDLE;
+		int srv_index = -1;
 		VkImageView uav = VK_NULL_HANDLE;
+		int uav_index = -1;
 		VkImageView rtv = VK_NULL_HANDLE;
 		VkImageView dsv = VK_NULL_HANDLE;
 		uint32_t framebuffer_layercount = 0;
 		std::vector<VkImageView> subresources_srv;
+		std::vector<int> subresources_srv_index;
 		std::vector<VkImageView> subresources_uav;
+		std::vector<int> subresources_uav_index;
 		std::vector<VkImageView> subresources_rtv;
 		std::vector<VkImageView> subresources_dsv;
 		std::vector<uint32_t> subresources_framebuffer_layercount;
@@ -735,6 +756,16 @@ namespace Vulkan_Internal
 			{
 				allocationhandler->destroyer_imageviews.push_back(std::make_pair(x, framecount));
 			}
+			if (srv_index >= 0) allocationhandler->destroyer_bindlessSampledImages.push_back(std::make_pair(srv_index, framecount));
+			if (uav_index >= 0) allocationhandler->destroyer_bindlessStorageImages.push_back(std::make_pair(uav_index, framecount));
+			for (auto x : subresources_srv_index)
+			{
+				if (x >= 0) allocationhandler->destroyer_bindlessSampledImages.push_back(std::make_pair(x, framecount));
+			}
+			for (auto x : subresources_uav_index)
+			{
+				if (x >= 0) allocationhandler->destroyer_bindlessStorageImages.push_back(std::make_pair(x, framecount));
+			}
 			allocationhandler->destroylocker.unlock();
 		}
 	};
@@ -742,6 +773,7 @@ namespace Vulkan_Internal
 	{
 		std::shared_ptr<GraphicsDevice_Vulkan::AllocationHandler> allocationhandler;
 		VkSampler resource = VK_NULL_HANDLE;
+		int index = -1;
 
 		~Sampler_Vulkan()
 		{
@@ -753,32 +785,19 @@ namespace Vulkan_Internal
 			allocationhandler->destroylocker.unlock();
 		}
 	};
-	struct Query_Vulkan
+	struct QueryHeap_Vulkan
 	{
 		std::shared_ptr<GraphicsDevice_Vulkan::AllocationHandler> allocationhandler;
-		GPU_QUERY_TYPE query_type = GPU_QUERY_TYPE_INVALID;
-		GraphicsDevice_Vulkan::AllocationHandler::QueryAllocator::Query query;
+		VkQueryPool pool = VK_NULL_HANDLE;
 
-		~Query_Vulkan()
+		~QueryHeap_Vulkan()
 		{
 			if (allocationhandler == nullptr)
 				return;
-			if (query.index != ~0)
-			{
-				allocationhandler->destroylocker.lock();
-				uint64_t framecount = allocationhandler->framecount;
-				switch (query_type)
-				{
-				case wiGraphics::GPU_QUERY_TYPE_OCCLUSION:
-				case wiGraphics::GPU_QUERY_TYPE_OCCLUSION_PREDICATE:
-					allocationhandler->destroyer_queries_occlusion.push_back(std::make_pair(query, framecount));
-					break;
-				case wiGraphics::GPU_QUERY_TYPE_TIMESTAMP:
-					allocationhandler->destroyer_queries_timestamp.push_back(std::make_pair(query, framecount));
-					break;
-				}
-				allocationhandler->destroylocker.unlock();
-			}
+			allocationhandler->destroylocker.lock();
+			uint64_t framecount = allocationhandler->framecount;
+			if (pool) allocationhandler->destroyer_querypools.push_back(std::make_pair(pool, framecount));
+			allocationhandler->destroylocker.unlock();
 		}
 	};
 	struct Shader_Vulkan
@@ -791,6 +810,12 @@ namespace Vulkan_Internal
 		VkDescriptorSetLayout descriptorSetLayout = VK_NULL_HANDLE; // no lifetime management here
 		std::vector<VkDescriptorSetLayoutBinding> layoutBindings;
 		std::vector<VkImageViewType> imageViewTypes;
+
+		std::vector<VkDescriptorSetLayoutBinding> bindlessBindings;
+		std::vector<VkDescriptorSet> bindlessSets;
+		uint32_t bindlessFirstSet = 0;
+
+		VkPushConstantRange pushconstants = {};
 
 		size_t binding_hash = 0;
 
@@ -813,7 +838,25 @@ namespace Vulkan_Internal
 		std::vector<VkDescriptorSetLayoutBinding> layoutBindings;
 		std::vector<VkImageViewType> imageViewTypes;
 
+		std::vector<VkDescriptorSetLayoutBinding> bindlessBindings;
+		std::vector<VkDescriptorSet> bindlessSets;
+		uint32_t bindlessFirstSet = 0;
+
+		VkPushConstantRange pushconstants = {};
+
 		size_t binding_hash = 0;
+
+		VkGraphicsPipelineCreateInfo pipelineInfo = {};
+		VkPipelineShaderStageCreateInfo shaderStages[SHADERSTAGE_COUNT] = {};
+		VkPipelineInputAssemblyStateCreateInfo inputAssembly = {};
+		VkPipelineRasterizationStateCreateInfo rasterizer = {};
+		VkPipelineRasterizationDepthClipStateCreateInfoEXT depthclip = {};
+		VkViewport viewport = {};
+		VkRect2D scissor = {};
+		VkPipelineViewportStateCreateInfo viewportState = {};
+		VkPipelineDepthStencilStateCreateInfo depthstencil = {};
+		VkSampleMask samplemask = {};
+		VkPipelineTessellationStateCreateInfo tessellationInfo = {};
 	};
 	struct RenderPass_Vulkan
 	{
@@ -840,6 +883,7 @@ namespace Vulkan_Internal
 		VmaAllocation allocation = nullptr;
 		VkBuffer buffer = VK_NULL_HANDLE;
 		VkAccelerationStructureKHR resource = VK_NULL_HANDLE;
+		int index = -1;
 
 		VkAccelerationStructureBuildGeometryInfoKHR buildInfo = {};
 		VkAccelerationStructureBuildSizesInfoKHR sizeInfo = {};
@@ -857,6 +901,7 @@ namespace Vulkan_Internal
 			uint64_t framecount = allocationhandler->framecount;
 			if (buffer) allocationhandler->destroyer_buffers.push_back(std::make_pair(std::make_pair(buffer, allocation), framecount));
 			if (resource) allocationhandler->destroyer_bvhs.push_back(std::make_pair(resource, framecount));
+			if (index >= 0) allocationhandler->destroyer_bindlessAccelerationStructures.push_back(std::make_pair(index, framecount));
 			allocationhandler->destroylocker.unlock();
 		}
 	};
@@ -875,65 +920,38 @@ namespace Vulkan_Internal
 			allocationhandler->destroylocker.unlock();
 		}
 	};
-	struct DescriptorTable_Vulkan
+	struct SwapChain_Vulkan
 	{
 		std::shared_ptr<GraphicsDevice_Vulkan::AllocationHandler> allocationhandler;
-		VkDescriptorSetLayout layout = VK_NULL_HANDLE;
-		VkDescriptorUpdateTemplate updatetemplate = VK_NULL_HANDLE;
+		VkSwapchainKHR swapChain = VK_NULL_HANDLE;
+		VkFormat swapChainImageFormat;
+		VkExtent2D swapChainExtent;
+		std::vector<VkImage> swapChainImages;
+		std::vector<VkImageView> swapChainImageViews;
+		std::vector<VkFramebuffer> swapChainFramebuffers;
+		RenderPass renderpass;
 
-		std::vector<size_t> resource_write_remap;
-		std::vector<size_t> sampler_write_remap;
+		VkSurfaceKHR surface = VK_NULL_HANDLE;
+		VkSurfaceCapabilitiesKHR swapchain_capabilities;
+		std::vector<VkSurfaceFormatKHR> swapchain_formats;
+		std::vector<VkPresentModeKHR> swapchain_presentModes;
 
-		struct Descriptor
+		uint32_t swapChainImageIndex = 0;
+		VkSemaphore swapchainAcquireSemaphore = VK_NULL_HANDLE;
+		VkSemaphore swapchainReleaseSemaphore = VK_NULL_HANDLE;
+
+		~SwapChain_Vulkan()
 		{
-			union
+			for (size_t i = 0; i < swapChainImages.size(); ++i)
 			{
-				VkDescriptorImageInfo imageinfo;
-				VkDescriptorBufferInfo bufferInfo;
-				VkBufferView bufferView;
-				VkAccelerationStructureKHR accelerationStructure;
-			};
-		};
-		std::vector<Descriptor> descriptors;
+				vkDestroyFramebuffer(allocationhandler->device, swapChainFramebuffers[i], nullptr);
+				vkDestroyImageView(allocationhandler->device, swapChainImageViews[i], nullptr);
+			}
+			vkDestroySwapchainKHR(allocationhandler->device, swapChain, nullptr);
+			vkDestroySurfaceKHR(allocationhandler->instance, surface, nullptr);
+			vkDestroySemaphore(allocationhandler->device, swapchainAcquireSemaphore, nullptr);
+			vkDestroySemaphore(allocationhandler->device, swapchainReleaseSemaphore, nullptr);
 
-		~DescriptorTable_Vulkan()
-		{
-			if (allocationhandler == nullptr)
-				return;
-			allocationhandler->destroylocker.lock();
-			uint64_t framecount = allocationhandler->framecount;
-			if (layout) allocationhandler->destroyer_descriptorSetLayouts.push_back(std::make_pair(layout, framecount));
-			if (updatetemplate) allocationhandler->destroyer_descriptorUpdateTemplates.push_back(std::make_pair(updatetemplate, framecount));
-			allocationhandler->destroylocker.unlock();
-		}
-	};
-	struct RootSignature_Vulkan
-	{
-		std::shared_ptr<GraphicsDevice_Vulkan::AllocationHandler> allocationhandler;
-		VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
-
-		bool dirty[COMMANDLIST_COUNT] = {};
-		std::vector<const DescriptorTable*> last_tables[COMMANDLIST_COUNT];
-		std::vector<VkDescriptorSet> last_descriptorsets[COMMANDLIST_COUNT];
-		std::vector<const GPUBuffer*> root_descriptors[COMMANDLIST_COUNT];
-		std::vector<uint32_t> root_offsets[COMMANDLIST_COUNT];
-
-		struct RootRemap
-		{
-			uint32_t space = 0;
-			uint32_t binding = 0;
-			uint32_t rangeIndex = 0;
-		};
-		std::vector<RootRemap> root_remap;
-
-		~RootSignature_Vulkan()
-		{
-			if (allocationhandler == nullptr)
-				return;
-			allocationhandler->destroylocker.lock();
-			uint64_t framecount = allocationhandler->framecount;
-			if (pipelineLayout) allocationhandler->destroyer_pipelineLayouts.push_back(std::make_pair(pipelineLayout, framecount));
-			allocationhandler->destroylocker.unlock();
 		}
 	};
 
@@ -949,9 +967,9 @@ namespace Vulkan_Internal
 	{
 		return static_cast<Sampler_Vulkan*>(param->internal_state.get());
 	}
-	Query_Vulkan* to_internal(const GPUQuery* param)
+	QueryHeap_Vulkan* to_internal(const GPUQueryHeap* param)
 	{
-		return static_cast<Query_Vulkan*>(param->internal_state.get());
+		return static_cast<QueryHeap_Vulkan*>(param->internal_state.get());
 	}
 	Shader_Vulkan* to_internal(const Shader* param)
 	{
@@ -973,18 +991,181 @@ namespace Vulkan_Internal
 	{
 		return static_cast<RTPipelineState_Vulkan*>(param->internal_state.get());
 	}
-	DescriptorTable_Vulkan* to_internal(const DescriptorTable* param)
+	SwapChain_Vulkan* to_internal(const SwapChain* param)
 	{
-		return static_cast<DescriptorTable_Vulkan*>(param->internal_state.get());
-	}
-	RootSignature_Vulkan* to_internal(const RootSignature* param)
-	{
-		return static_cast<RootSignature_Vulkan*>(param->internal_state.get());
+		return static_cast<SwapChain_Vulkan*>(param->internal_state.get());
 	}
 }
 using namespace Vulkan_Internal;
 
 	// Allocators:
+
+	void GraphicsDevice_Vulkan::CopyAllocator::init(GraphicsDevice_Vulkan* device)
+	{
+		this->device = device;
+
+		VkSemaphoreTypeCreateInfo timelineCreateInfo = {};
+		timelineCreateInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
+		timelineCreateInfo.pNext = nullptr;
+		timelineCreateInfo.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+		timelineCreateInfo.initialValue = 0;
+
+		VkSemaphoreCreateInfo createInfo = {};
+		createInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+		createInfo.pNext = &timelineCreateInfo;
+		createInfo.flags = 0;
+
+		VkResult res = vkCreateSemaphore(device->device, &createInfo, nullptr, &semaphore);
+		assert(res == VK_SUCCESS);
+	}
+	void GraphicsDevice_Vulkan::CopyAllocator::destroy()
+	{
+		vkQueueWaitIdle(device->copyQueue);
+		for (auto& x : freelist)
+		{
+			vkDestroyCommandPool(device->device, x.commandPool, nullptr);
+		}
+		vkDestroySemaphore(device->device, semaphore, nullptr);
+	}
+	GraphicsDevice_Vulkan::CopyAllocator::CopyCMD GraphicsDevice_Vulkan::CopyAllocator::allocate(uint32_t staging_size)
+	{
+		locker.lock();
+
+		// create a new command list if there are no free ones:
+		if (freelist.empty())
+		{
+			CopyCMD cmd;
+
+			VkCommandPoolCreateInfo poolInfo = {};
+			poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+			poolInfo.queueFamilyIndex = device->copyFamily;
+			poolInfo.flags = 0;
+
+			VkResult res = vkCreateCommandPool(device->device, &poolInfo, nullptr, &cmd.commandPool);
+			assert(res == VK_SUCCESS);
+
+			VkCommandBufferAllocateInfo commandBufferInfo = {};
+			commandBufferInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+			commandBufferInfo.commandBufferCount = 1;
+			commandBufferInfo.commandPool = cmd.commandPool;
+			commandBufferInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+
+			res = vkAllocateCommandBuffers(device->device, &commandBufferInfo, &cmd.commandBuffer);
+			assert(res == VK_SUCCESS);
+
+			freelist.push_back(cmd);
+		}
+
+		CopyCMD cmd = freelist.back();
+		if (cmd.uploadbuffer.desc.ByteWidth < staging_size)
+		{
+			// Try to search for a staging buffer that can fit the request:
+			for (size_t i = 0; i < freelist.size(); ++i)
+			{
+				if (freelist[i].uploadbuffer.desc.ByteWidth >= staging_size)
+				{
+					cmd = freelist[i];
+					std::swap(freelist[i], freelist.back());
+					break;
+				}
+			}
+		}
+		freelist.pop_back();
+		locker.unlock();
+
+		// If no buffer was found that fits the data, create one:
+		if (cmd.uploadbuffer.desc.ByteWidth < staging_size)
+		{
+			GPUBufferDesc uploaddesc;
+			uploaddesc.ByteWidth = wiMath::GetNextPowerOfTwo(staging_size);
+			uploaddesc.Usage = USAGE_STAGING;
+			bool upload_success = device->CreateBuffer(&uploaddesc, nullptr, &cmd.uploadbuffer);
+			assert(upload_success);
+
+			VmaAllocation upload_allocation = to_internal(&cmd.uploadbuffer)->allocation;
+			cmd.data = upload_allocation->GetMappedData();
+			assert(cmd.data != nullptr);
+			cmd.upload_resource = to_internal(&cmd.uploadbuffer)->resource;
+		}
+
+		// begin command list in valid state:
+		VkResult res = vkResetCommandPool(device->device, cmd.commandPool, 0);
+		assert(res == VK_SUCCESS);
+
+		VkCommandBufferBeginInfo beginInfo = {};
+		beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+		beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+		beginInfo.pInheritanceInfo = nullptr;
+
+		res = vkBeginCommandBuffer(cmd.commandBuffer, &beginInfo);
+		assert(res == VK_SUCCESS);
+
+		return cmd;
+	}
+	void GraphicsDevice_Vulkan::CopyAllocator::submit(CopyCMD cmd)
+	{
+		VkResult res = vkEndCommandBuffer(cmd.commandBuffer);
+		assert(res == VK_SUCCESS);
+
+		// It was very slow in Vulkan to submit the copies immediately
+		//	In Vulkan, the submit is not thread safe, so it had to be locked
+		//	Instead, the submits are batched and performed in flush() function
+		locker.lock();
+		cmd.target = ++fenceValue;
+		worklist.push_back(cmd);
+		submit_cmds.push_back(cmd.commandBuffer);
+		submit_wait = std::max(submit_wait, cmd.target);
+		locker.unlock();
+	}
+	uint64_t GraphicsDevice_Vulkan::CopyAllocator::flush()
+	{
+		locker.lock();
+		if (!submit_cmds.empty())
+		{
+			VkSubmitInfo submitInfo = {};
+			submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+			submitInfo.commandBufferCount = (uint32_t)submit_cmds.size();
+			submitInfo.pCommandBuffers = submit_cmds.data();
+			submitInfo.pSignalSemaphores = &semaphore;
+			submitInfo.signalSemaphoreCount = 1;
+
+			VkTimelineSemaphoreSubmitInfo timelineInfo = {};
+			timelineInfo.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
+			timelineInfo.pNext = nullptr;
+			timelineInfo.waitSemaphoreValueCount = 0;
+			timelineInfo.pWaitSemaphoreValues = nullptr;
+			timelineInfo.signalSemaphoreValueCount = 1;
+			timelineInfo.pSignalSemaphoreValues = &submit_wait;
+
+			submitInfo.pNext = &timelineInfo;
+
+			VkResult res = vkQueueSubmit(device->copyQueue, 1, &submitInfo, VK_NULL_HANDLE);
+			assert(res == VK_SUCCESS);
+
+			submit_cmds.clear();
+		}
+
+		// free up the finished command lists:
+		uint64_t completed_fence_value;
+		VkResult res = vkGetSemaphoreCounterValue(device->device, semaphore, &completed_fence_value);
+		assert(res == VK_SUCCESS);
+		for (size_t i = 0; i < worklist.size(); ++i)
+		{
+			if (worklist[i].target <= completed_fence_value)
+			{
+				freelist.push_back(worklist[i]);
+				worklist[i] = worklist.back();
+				worklist.pop_back();
+				i--;
+			}
+		}
+
+		uint64_t value = submit_wait;
+		submit_wait = 0;
+		locker.unlock();
+
+		return value;
+	}
 
 	void GraphicsDevice_Vulkan::FrameResources::ResourceFrameAllocator::init(GraphicsDevice_Vulkan* device, size_t size)
 	{
@@ -1034,6 +1215,25 @@ using namespace Vulkan_Internal;
 		this->buffer.desc.Usage = USAGE_DYNAMIC;
 		this->buffer.desc.BindFlags = BIND_VERTEX_BUFFER | BIND_INDEX_BUFFER | BIND_SHADER_RESOURCE;
 		this->buffer.desc.MiscFlags = RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+
+		int index = device->allocationhandler->bindlessStorageBuffers.allocate();
+		if (index >= 0)
+		{
+			VkDescriptorBufferInfo bufferInfo = {};
+			bufferInfo.buffer = internal_state->resource;
+			bufferInfo.offset = 0;
+			bufferInfo.range = (VkDeviceSize)size;
+			VkWriteDescriptorSet write = {};
+			write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+			write.dstBinding = 0;
+			write.dstArrayElement = index;
+			write.descriptorCount = 1;
+			write.dstSet = device->allocationhandler->bindlessStorageBuffers.descriptorSet;
+			write.pBufferInfo = &bufferInfo;
+			vkUpdateDescriptorSets(device->device, 1, &write, 0, nullptr);
+		}
+		internal_state->srv_index = index;
 	}
 	uint8_t* GraphicsDevice_Vulkan::FrameResources::ResourceFrameAllocator::allocate(size_t dataSize, size_t alignment)
 	{
@@ -1060,7 +1260,7 @@ using namespace Vulkan_Internal;
 		return static_cast<uint64_t>(address - dataBegin);
 	}
 
-	void GraphicsDevice_Vulkan::FrameResources::DescriptorTableFrameAllocator::init(GraphicsDevice_Vulkan* device)
+	void GraphicsDevice_Vulkan::FrameResources::DescriptorBinder::init(GraphicsDevice_Vulkan* device)
 	{
 		this->device = device;
 
@@ -1109,7 +1309,7 @@ using namespace Vulkan_Internal;
 		poolSizes[7].descriptorCount = GPU_SAMPLER_HEAP_COUNT * poolSize;
 		count++;
 
-		if (device->CheckCapability(GRAPHICSDEVICE_CAPABILITY_RAYTRACING))
+		if (device->CheckCapability(GRAPHICSDEVICE_CAPABILITY_RAYTRACING_PIPELINE) || device->CheckCapability(GRAPHICSDEVICE_CAPABILITY_RAYTRACING_INLINE))
 		{
 			poolSizes[8].type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
 			poolSizes[8].descriptorCount = GPU_RESOURCE_HEAP_SRV_COUNT * poolSize;
@@ -1129,15 +1329,17 @@ using namespace Vulkan_Internal;
 		reset();
 
 	}
-	void GraphicsDevice_Vulkan::FrameResources::DescriptorTableFrameAllocator::destroy()
+	void GraphicsDevice_Vulkan::FrameResources::DescriptorBinder::destroy()
 	{
 		if (descriptorPool != VK_NULL_HANDLE)
 		{
+			device->allocationhandler->destroylocker.lock();
 			device->allocationhandler->destroyer_descriptorPools.push_back(std::make_pair(descriptorPool, device->FRAMECOUNT));
 			descriptorPool = VK_NULL_HANDLE;
+			device->allocationhandler->destroylocker.unlock();
 		}
 	}
-	void GraphicsDevice_Vulkan::FrameResources::DescriptorTableFrameAllocator::reset()
+	void GraphicsDevice_Vulkan::FrameResources::DescriptorBinder::reset()
 	{
 		dirty = true;
 
@@ -1154,11 +1356,11 @@ using namespace Vulkan_Internal;
 		memset(UAV_index, -1, sizeof(UAV_index));
 		memset(SAM, 0, sizeof(SAM));
 	}
-	void GraphicsDevice_Vulkan::FrameResources::DescriptorTableFrameAllocator::validate(bool graphics, CommandList cmd, bool raytracing)
+	void GraphicsDevice_Vulkan::FrameResources::DescriptorBinder::flush(bool graphics, CommandList cmd)
 	{
 		if (!dirty)
 			return;
-		dirty = true;
+		dirty = false;
 
 		auto pso_internal = graphics ? to_internal(device->active_pso[cmd]) : nullptr;
 		auto cs_internal = graphics ? nullptr : to_internal(device->active_cs[cmd]);
@@ -1213,355 +1415,346 @@ using namespace Vulkan_Internal;
 				continue;
 			}
 
-			descriptorWrites.emplace_back();
-			auto& write = descriptorWrites.back();
-			write = {};
-			write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-			write.dstSet = descriptorSet;
-			write.dstArrayElement = 0;
-			write.descriptorType = x.descriptorType;
-			write.dstBinding = x.binding;
-			write.descriptorCount = 1;
-
 			VkImageViewType viewtype = imageViewTypes[i++];
 
-			switch (x.descriptorType)
+			for (uint32_t descriptor_index = 0; descriptor_index < x.descriptorCount; ++descriptor_index)
 			{
-			case VK_DESCRIPTOR_TYPE_SAMPLER:
-			{
-				imageInfos.emplace_back();
-				write.pImageInfo = &imageInfos.back();
-				imageInfos.back() = {};
+				uint32_t unrolled_binding = x.binding + descriptor_index;
 
-				const uint32_t original_binding = x.binding - VULKAN_BINDING_SHIFT_S;
-				const Sampler* sampler = SAM[original_binding];
-				if (sampler == nullptr || !sampler->IsValid())
-				{
-					imageInfos.back().sampler = device->nullSampler;
-				}
-				else
-				{
-					imageInfos.back().sampler = to_internal(sampler)->resource;
-				}
-			}
-			break;
+				descriptorWrites.emplace_back();
+				auto& write = descriptorWrites.back();
+				write = {};
+				write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+				write.dstSet = descriptorSet;
+				write.dstArrayElement = descriptor_index;
+				write.descriptorType = x.descriptorType;
+				write.dstBinding = x.binding;
+				write.descriptorCount = 1;
 
-			case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
-			{
-				imageInfos.emplace_back();
-				write.pImageInfo = &imageInfos.back();
-				imageInfos.back() = {};
-				imageInfos.back().imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-				const uint32_t original_binding = x.binding - VULKAN_BINDING_SHIFT_T;
-				const GPUResource* resource = SRV[original_binding];
-				if (resource == nullptr || !resource->IsValid() || !resource->IsTexture())
+				switch (x.descriptorType)
 				{
-					switch (viewtype)
+				case VK_DESCRIPTOR_TYPE_SAMPLER:
+				{
+					imageInfos.emplace_back();
+					write.pImageInfo = &imageInfos.back();
+					imageInfos.back() = {};
+
+					const uint32_t original_binding = unrolled_binding - VULKAN_BINDING_SHIFT_S;
+					const Sampler* sampler = SAM[original_binding];
+					if (sampler == nullptr || !sampler->IsValid())
 					{
-					case VK_IMAGE_VIEW_TYPE_1D:
-						imageInfos.back().imageView = device->nullImageView1D;
-						break;
-					case VK_IMAGE_VIEW_TYPE_2D:
-						imageInfos.back().imageView = device->nullImageView2D;
-						break;
-					case VK_IMAGE_VIEW_TYPE_3D:
-						imageInfos.back().imageView = device->nullImageView3D;
-						break;
-					case VK_IMAGE_VIEW_TYPE_CUBE:
-						imageInfos.back().imageView = device->nullImageViewCube;
-						break;
-					case VK_IMAGE_VIEW_TYPE_1D_ARRAY:
-						imageInfos.back().imageView = device->nullImageView1DArray;
-						break;
-					case VK_IMAGE_VIEW_TYPE_2D_ARRAY:
-						imageInfos.back().imageView = device->nullImageView2DArray;
-						break;
-					case VK_IMAGE_VIEW_TYPE_CUBE_ARRAY:
-						imageInfos.back().imageView = device->nullImageViewCubeArray;
-						break;
-					case VK_IMAGE_VIEW_TYPE_MAX_ENUM:
-						break;
-					default:
-						break;
-					}
-				}
-				else
-				{
-					int subresource = SRV_index[original_binding];
-					const Texture* texture = (const Texture*)resource;
-					if (subresource >= 0)
-					{
-						imageInfos.back().imageView = to_internal(texture)->subresources_srv[subresource];
+						imageInfos.back().sampler = device->nullSampler;
 					}
 					else
 					{
-						imageInfos.back().imageView = to_internal(texture)->srv;
-					}
-
-					VkImageLayout layout = _ConvertImageLayout(texture->desc.layout);
-					if (layout != VK_IMAGE_LAYOUT_GENERAL && layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-					{
-						// Means texture initial layout is not compatible, so it must have been transitioned
-						layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-					}
-					imageInfos.back().imageLayout = layout;
-				}
-			}
-			break;
-
-			case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
-			{
-				imageInfos.emplace_back();
-				write.pImageInfo = &imageInfos.back();
-				imageInfos.back() = {};
-				imageInfos.back().imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-				const uint32_t original_binding = x.binding - VULKAN_BINDING_SHIFT_U;
-				const GPUResource* resource = UAV[original_binding];
-				if (resource == nullptr || !resource->IsValid() || !resource->IsTexture())
-				{
-					switch (viewtype)
-					{
-					case VK_IMAGE_VIEW_TYPE_1D:
-						imageInfos.back().imageView = device->nullImageView1D;
-						break;
-					case VK_IMAGE_VIEW_TYPE_2D:
-						imageInfos.back().imageView = device->nullImageView2D;
-						break;
-					case VK_IMAGE_VIEW_TYPE_3D:
-						imageInfos.back().imageView = device->nullImageView3D;
-						break;
-					case VK_IMAGE_VIEW_TYPE_CUBE:
-						imageInfos.back().imageView = device->nullImageViewCube;
-						break;
-					case VK_IMAGE_VIEW_TYPE_1D_ARRAY:
-						imageInfos.back().imageView = device->nullImageView1DArray;
-						break;
-					case VK_IMAGE_VIEW_TYPE_2D_ARRAY:
-						imageInfos.back().imageView = device->nullImageView2DArray;
-						break;
-					case VK_IMAGE_VIEW_TYPE_CUBE_ARRAY:
-						imageInfos.back().imageView = device->nullImageViewCubeArray;
-						break;
-					case VK_IMAGE_VIEW_TYPE_MAX_ENUM:
-						break;
-					default:
-						break;
+						imageInfos.back().sampler = to_internal(sampler)->resource;
 					}
 				}
-				else
-				{
-					int subresource = UAV_index[original_binding];
-					const Texture* texture = (const Texture*)resource;
-					if (subresource >= 0)
-					{
-						imageInfos.back().imageView = to_internal(texture)->subresources_uav[subresource];
-					}
-					else
-					{
-						imageInfos.back().imageView = to_internal(texture)->uav;
-					}
-				}
-			}
-			break;
+				break;
 
-			case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
-			{
-				bufferInfos.emplace_back();
-				write.pBufferInfo = &bufferInfos.back();
-				bufferInfos.back() = {};
-
-				const uint32_t original_binding = x.binding - VULKAN_BINDING_SHIFT_B;
-				const GPUBuffer* buffer = CBV[original_binding];
-				if (buffer == nullptr || !buffer->IsValid())
+				case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
 				{
-					bufferInfos.back().buffer = device->nullBuffer;
-					bufferInfos.back().range = VK_WHOLE_SIZE;
-				}
-				else
-				{
-					auto internal_state = to_internal(buffer);
-					if (buffer->desc.Usage == USAGE_DYNAMIC)
-					{
-						const GPUAllocation& allocation = internal_state->dynamic[cmd];
-						bufferInfos.back().buffer = to_internal(allocation.buffer)->resource;
-						bufferInfos.back().offset = allocation.offset;
-						bufferInfos.back().range = buffer->desc.ByteWidth;
-					}
-					else
-					{
-						bufferInfos.back().buffer = internal_state->resource;
-						bufferInfos.back().offset = 0;
-						bufferInfos.back().range = buffer->desc.ByteWidth;
-					}
-				}
-			}
-			break;
+					imageInfos.emplace_back();
+					write.pImageInfo = &imageInfos.back();
+					imageInfos.back() = {};
 
-			case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
-			{
-				texelBufferViews.emplace_back();
-				write.pTexelBufferView = &texelBufferViews.back();
-				texelBufferViews.back() = {};
-
-				const uint32_t original_binding = x.binding - VULKAN_BINDING_SHIFT_T;
-				const GPUResource* resource = SRV[original_binding];
-				if (resource == nullptr || !resource->IsValid() || !resource->IsBuffer())
-				{
-					texelBufferViews.back() = device->nullBufferView;
-				}
-				else
-				{
-					int subresource = SRV_index[original_binding];
-					const GPUBuffer* buffer = (const GPUBuffer*)resource;
-					if (subresource >= 0)
-					{
-						texelBufferViews.back() = to_internal(buffer)->subresources_srv[subresource];
-					}
-					else
-					{
-						texelBufferViews.back() = to_internal(buffer)->srv;
-					}
-				}
-			}
-			break;
-
-			case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
-			{
-				texelBufferViews.emplace_back();
-				write.pTexelBufferView = &texelBufferViews.back();
-				texelBufferViews.back() = {};
-
-				const uint32_t original_binding = x.binding - VULKAN_BINDING_SHIFT_U;
-				const GPUResource* resource = UAV[original_binding];
-				if (resource == nullptr || !resource->IsValid() || !resource->IsBuffer())
-				{
-					texelBufferViews.back() = device->nullBufferView;
-				}
-				else
-				{
-					int subresource = UAV_index[original_binding];
-					const GPUBuffer* buffer = (const GPUBuffer*)resource;
-					if (subresource >= 0)
-					{
-						texelBufferViews.back() = to_internal(buffer)->subresources_uav[subresource];
-					}
-					else
-					{
-						texelBufferViews.back() = to_internal(buffer)->uav;
-					}
-				}
-			}
-			break;
-
-			case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
-			{
-				bufferInfos.emplace_back();
-				write.pBufferInfo = &bufferInfos.back();
-				bufferInfos.back() = {};
-
-				if (x.binding < VULKAN_BINDING_SHIFT_U)
-				{
-					// SRV
-					const uint32_t original_binding = x.binding - VULKAN_BINDING_SHIFT_T;
+					const uint32_t original_binding = unrolled_binding - VULKAN_BINDING_SHIFT_T;
 					const GPUResource* resource = SRV[original_binding];
-					if (resource == nullptr || !resource->IsValid() || !resource->IsBuffer())
+					if (resource == nullptr || !resource->IsValid() || !resource->IsTexture())
+					{
+						switch (viewtype)
+						{
+						case VK_IMAGE_VIEW_TYPE_1D:
+							imageInfos.back().imageView = device->nullImageView1D;
+							break;
+						case VK_IMAGE_VIEW_TYPE_2D:
+							imageInfos.back().imageView = device->nullImageView2D;
+							break;
+						case VK_IMAGE_VIEW_TYPE_3D:
+							imageInfos.back().imageView = device->nullImageView3D;
+							break;
+						case VK_IMAGE_VIEW_TYPE_CUBE:
+							imageInfos.back().imageView = device->nullImageViewCube;
+							break;
+						case VK_IMAGE_VIEW_TYPE_1D_ARRAY:
+							imageInfos.back().imageView = device->nullImageView1DArray;
+							break;
+						case VK_IMAGE_VIEW_TYPE_2D_ARRAY:
+							imageInfos.back().imageView = device->nullImageView2DArray;
+							break;
+						case VK_IMAGE_VIEW_TYPE_CUBE_ARRAY:
+							imageInfos.back().imageView = device->nullImageViewCubeArray;
+							break;
+						case VK_IMAGE_VIEW_TYPE_MAX_ENUM:
+							break;
+						default:
+							break;
+						}
+						imageInfos.back().imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+					}
+					else
+					{
+						int subresource = SRV_index[original_binding];
+						const Texture* texture = (const Texture*)resource;
+						if (subresource >= 0)
+						{
+							imageInfos.back().imageView = to_internal(texture)->subresources_srv[subresource];
+						}
+						else
+						{
+							imageInfos.back().imageView = to_internal(texture)->srv;
+						}
+
+						imageInfos.back().imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+					}
+				}
+				break;
+
+				case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+				{
+					imageInfos.emplace_back();
+					write.pImageInfo = &imageInfos.back();
+					imageInfos.back() = {};
+					imageInfos.back().imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+					const uint32_t original_binding = unrolled_binding - VULKAN_BINDING_SHIFT_U;
+					const GPUResource* resource = UAV[original_binding];
+					if (resource == nullptr || !resource->IsValid() || !resource->IsTexture())
+					{
+						switch (viewtype)
+						{
+						case VK_IMAGE_VIEW_TYPE_1D:
+							imageInfos.back().imageView = device->nullImageView1D;
+							break;
+						case VK_IMAGE_VIEW_TYPE_2D:
+							imageInfos.back().imageView = device->nullImageView2D;
+							break;
+						case VK_IMAGE_VIEW_TYPE_3D:
+							imageInfos.back().imageView = device->nullImageView3D;
+							break;
+						case VK_IMAGE_VIEW_TYPE_CUBE:
+							imageInfos.back().imageView = device->nullImageViewCube;
+							break;
+						case VK_IMAGE_VIEW_TYPE_1D_ARRAY:
+							imageInfos.back().imageView = device->nullImageView1DArray;
+							break;
+						case VK_IMAGE_VIEW_TYPE_2D_ARRAY:
+							imageInfos.back().imageView = device->nullImageView2DArray;
+							break;
+						case VK_IMAGE_VIEW_TYPE_CUBE_ARRAY:
+							imageInfos.back().imageView = device->nullImageViewCubeArray;
+							break;
+						case VK_IMAGE_VIEW_TYPE_MAX_ENUM:
+							break;
+						default:
+							break;
+						}
+					}
+					else
+					{
+						int subresource = UAV_index[original_binding];
+						const Texture* texture = (const Texture*)resource;
+						if (subresource >= 0)
+						{
+							imageInfos.back().imageView = to_internal(texture)->subresources_uav[subresource];
+						}
+						else
+						{
+							imageInfos.back().imageView = to_internal(texture)->uav;
+						}
+					}
+				}
+				break;
+
+				case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+				{
+					bufferInfos.emplace_back();
+					write.pBufferInfo = &bufferInfos.back();
+					bufferInfos.back() = {};
+
+					const uint32_t original_binding = unrolled_binding - VULKAN_BINDING_SHIFT_B;
+					const GPUBuffer* buffer = CBV[original_binding];
+					if (buffer == nullptr || !buffer->IsValid())
 					{
 						bufferInfos.back().buffer = device->nullBuffer;
 						bufferInfos.back().range = VK_WHOLE_SIZE;
+					}
+					else
+					{
+						auto internal_state = to_internal(buffer);
+						if (buffer->desc.Usage == USAGE_DYNAMIC)
+						{
+							const GPUAllocation& allocation = internal_state->dynamic[cmd];
+							bufferInfos.back().buffer = to_internal(allocation.buffer)->resource;
+							bufferInfos.back().offset = allocation.offset;
+							bufferInfos.back().range = buffer->desc.ByteWidth;
+						}
+						else
+						{
+							bufferInfos.back().buffer = internal_state->resource;
+							bufferInfos.back().offset = 0;
+							bufferInfos.back().range = buffer->desc.ByteWidth;
+						}
+					}
+				}
+				break;
+
+				case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+				{
+					texelBufferViews.emplace_back();
+					write.pTexelBufferView = &texelBufferViews.back();
+					texelBufferViews.back() = {};
+
+					const uint32_t original_binding = unrolled_binding - VULKAN_BINDING_SHIFT_T;
+					const GPUResource* resource = SRV[original_binding];
+					if (resource == nullptr || !resource->IsValid() || !resource->IsBuffer())
+					{
+						texelBufferViews.back() = device->nullBufferView;
 					}
 					else
 					{
 						int subresource = SRV_index[original_binding];
 						const GPUBuffer* buffer = (const GPUBuffer*)resource;
-						bufferInfos.back().buffer = to_internal(buffer)->resource;
-						bufferInfos.back().range = buffer->desc.ByteWidth;
+						if (subresource >= 0)
+						{
+							texelBufferViews.back() = to_internal(buffer)->subresources_srv[subresource];
+						}
+						else
+						{
+							texelBufferViews.back() = to_internal(buffer)->srv;
+						}
 					}
 				}
-				else
+				break;
+
+				case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
 				{
-					// UAV
-					const uint32_t original_binding = x.binding - VULKAN_BINDING_SHIFT_U;
+					texelBufferViews.emplace_back();
+					write.pTexelBufferView = &texelBufferViews.back();
+					texelBufferViews.back() = {};
+
+					const uint32_t original_binding = unrolled_binding - VULKAN_BINDING_SHIFT_U;
 					const GPUResource* resource = UAV[original_binding];
 					if (resource == nullptr || !resource->IsValid() || !resource->IsBuffer())
 					{
-						bufferInfos.back().buffer = device->nullBuffer;
-						bufferInfos.back().range = VK_WHOLE_SIZE;
+						texelBufferViews.back() = device->nullBufferView;
 					}
 					else
 					{
 						int subresource = UAV_index[original_binding];
 						const GPUBuffer* buffer = (const GPUBuffer*)resource;
-						bufferInfos.back().buffer = to_internal(buffer)->resource;
-						bufferInfos.back().range = buffer->desc.ByteWidth;
+						if (subresource >= 0)
+						{
+							texelBufferViews.back() = to_internal(buffer)->subresources_uav[subresource];
+						}
+						else
+						{
+							texelBufferViews.back() = to_internal(buffer)->uav;
+						}
 					}
 				}
-			}
-			break;
+				break;
 
-			case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
-			{
-				accelerationStructureViews.emplace_back();
-				write.pNext = &accelerationStructureViews.back();
-				accelerationStructureViews.back() = {};
-				accelerationStructureViews.back().sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
-				accelerationStructureViews.back().accelerationStructureCount = 1;
-
-				const uint32_t original_binding = x.binding - VULKAN_BINDING_SHIFT_T;
-				const GPUResource* resource = SRV[original_binding];
-				if (resource == nullptr || !resource->IsValid() || !resource->IsAccelerationStructure())
+				case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
 				{
-					assert(0); // invalid acceleration structure!
-				}
-				else
-				{
-					const RaytracingAccelerationStructure* as = (const RaytracingAccelerationStructure*)resource;
-					accelerationStructureViews.back().pAccelerationStructures = &to_internal(as)->resource;
-				}
-			}
-			break;
+					bufferInfos.emplace_back();
+					write.pBufferInfo = &bufferInfos.back();
+					bufferInfos.back() = {};
 
+					if (x.binding < VULKAN_BINDING_SHIFT_U)
+					{
+						// SRV
+						const uint32_t original_binding = unrolled_binding - VULKAN_BINDING_SHIFT_T;
+						const GPUResource* resource = SRV[original_binding];
+						if (resource == nullptr || !resource->IsValid() || !resource->IsBuffer())
+						{
+							bufferInfos.back().buffer = device->nullBuffer;
+							bufferInfos.back().range = VK_WHOLE_SIZE;
+						}
+						else
+						{
+							int subresource = SRV_index[original_binding];
+							const GPUBuffer* buffer = (const GPUBuffer*)resource;
+							bufferInfos.back().buffer = to_internal(buffer)->resource;
+							bufferInfos.back().range = buffer->desc.ByteWidth;
+						}
+					}
+					else
+					{
+						// UAV
+						const uint32_t original_binding = unrolled_binding - VULKAN_BINDING_SHIFT_U;
+						const GPUResource* resource = UAV[original_binding];
+						if (resource == nullptr || !resource->IsValid() || !resource->IsBuffer())
+						{
+							bufferInfos.back().buffer = device->nullBuffer;
+							bufferInfos.back().range = VK_WHOLE_SIZE;
+						}
+						else
+						{
+							int subresource = UAV_index[original_binding];
+							const GPUBuffer* buffer = (const GPUBuffer*)resource;
+							bufferInfos.back().buffer = to_internal(buffer)->resource;
+							bufferInfos.back().range = buffer->desc.ByteWidth;
+						}
+					}
+				}
+				break;
+
+				case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
+				{
+					accelerationStructureViews.emplace_back();
+					write.pNext = &accelerationStructureViews.back();
+					accelerationStructureViews.back() = {};
+					accelerationStructureViews.back().sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
+					accelerationStructureViews.back().accelerationStructureCount = 1;
+
+					const uint32_t original_binding = unrolled_binding - VULKAN_BINDING_SHIFT_T;
+					const GPUResource* resource = SRV[original_binding];
+					if (resource == nullptr || !resource->IsValid() || !resource->IsAccelerationStructure())
+					{
+						assert(0); // invalid acceleration structure!
+					}
+					else
+					{
+						const RaytracingAccelerationStructure* as = (const RaytracingAccelerationStructure*)resource;
+						accelerationStructureViews.back().pAccelerationStructures = &to_internal(as)->resource;
+					}
+				}
+				break;
+
+				}
 			}
 		}
 
-		vkUpdateDescriptorSets(device->device, (uint32_t)descriptorWrites.size(), descriptorWrites.data(), 0, nullptr);
-
-		vkCmdBindDescriptorSets(device->GetDirectCommandList(cmd),
-			graphics ? VK_PIPELINE_BIND_POINT_GRAPHICS : (raytracing ? VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR : VK_PIPELINE_BIND_POINT_COMPUTE),
-			pipelineLayout, 0, 1, &descriptorSet, 0, nullptr
-		);
-	}
-	VkDescriptorSet GraphicsDevice_Vulkan::FrameResources::DescriptorTableFrameAllocator::commit(const DescriptorTable* table)
-	{
-		auto internal_state = to_internal(table);
-
-		VkDescriptorSetAllocateInfo allocInfo = {};
-		allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-		allocInfo.descriptorPool = descriptorPool;
-		allocInfo.descriptorSetCount = 1;
-		allocInfo.pSetLayouts = &internal_state->layout;
-
-		VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
-		VkResult res = vkAllocateDescriptorSets(device->device, &allocInfo, &descriptorSet);
-		while (res == VK_ERROR_OUT_OF_POOL_MEMORY)
-		{
-			poolSize *= 2;
-			destroy();
-			init(device);
-			allocInfo.descriptorPool = descriptorPool;
-			res = vkAllocateDescriptorSets(device->device, &allocInfo, &descriptorSet);
-		}
-		assert(res == VK_SUCCESS);
-
-		vkUpdateDescriptorSetWithTemplate(
+		vkUpdateDescriptorSets(
 			device->device,
-			descriptorSet,
-			internal_state->updatetemplate,
-			internal_state->descriptors.data()
+			(uint32_t)descriptorWrites.size(),
+			descriptorWrites.data(),
+			0,
+			nullptr
 		);
 
-		return descriptorSet;
+		VkPipelineBindPoint bindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+		if (!graphics)
+		{
+			bindPoint = VK_PIPELINE_BIND_POINT_COMPUTE;
+
+			if (device->active_cs[cmd]->stage == LIB)
+			{
+				bindPoint = VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR;
+			}
+		}
+
+		vkCmdBindDescriptorSets(
+			device->GetCommandList(cmd),
+			bindPoint,
+			pipelineLayout,
+			0,
+			1,
+			&descriptorSet,
+			0,
+			nullptr
+		);
 	}
 
 	void GraphicsDevice_Vulkan::pso_validate(CommandList cmd)
@@ -1571,6 +1764,8 @@ using namespace Vulkan_Internal;
 
 		const PipelineState* pso = active_pso[cmd];
 		size_t pipeline_hash = prev_pipeline_hash[cmd];
+		wiHelper::hash_combine(pipeline_hash, vb_hash[cmd]);
+		auto internal_state = to_internal(pso);
 
 		VkPipeline pipeline = VK_NULL_HANDLE;
 		auto it = pipelines_global.find(pipeline_hash);
@@ -1587,279 +1782,16 @@ using namespace Vulkan_Internal;
 
 			if (pipeline == VK_NULL_HANDLE)
 			{
-				VkGraphicsPipelineCreateInfo pipelineInfo = {};
-				//pipelineInfo.flags = VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT;
-				pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-				if (pso->desc.rootSignature == nullptr)
-				{
-					pipelineInfo.layout = to_internal(pso)->pipelineLayout;
-				}
-				else
-				{
-					pipelineInfo.layout = to_internal(pso->desc.rootSignature)->pipelineLayout;
-				}
-				pipelineInfo.renderPass = active_renderpass[cmd] == nullptr ? defaultRenderPass : to_internal(active_renderpass[cmd])->renderpass;
+				VkGraphicsPipelineCreateInfo pipelineInfo = internal_state->pipelineInfo; // make a copy here
+				pipelineInfo.renderPass = to_internal(active_renderpass[cmd])->renderpass;
 				pipelineInfo.subpass = 0;
-				pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
-
-				// Shaders:
-
-				uint32_t shaderStageCount = 0;
-				VkPipelineShaderStageCreateInfo shaderStages[SHADERSTAGE_COUNT];
-				if (pso->desc.ms != nullptr && pso->desc.ms->IsValid())
-				{
-					shaderStages[shaderStageCount++] = to_internal(pso->desc.ms)->stageInfo;
-				}
-				if (pso->desc.as != nullptr && pso->desc.as->IsValid())
-				{
-					shaderStages[shaderStageCount++] = to_internal(pso->desc.as)->stageInfo;
-				}
-				if (pso->desc.vs != nullptr && pso->desc.vs->IsValid())
-				{
-					shaderStages[shaderStageCount++] = to_internal(pso->desc.vs)->stageInfo;
-				}
-				if (pso->desc.hs != nullptr && pso->desc.hs->IsValid())
-				{
-					shaderStages[shaderStageCount++] = to_internal(pso->desc.hs)->stageInfo;
-				}
-				if (pso->desc.ds != nullptr && pso->desc.ds->IsValid())
-				{
-					shaderStages[shaderStageCount++] = to_internal(pso->desc.ds)->stageInfo;
-				}
-				if (pso->desc.gs != nullptr && pso->desc.gs->IsValid())
-				{
-					shaderStages[shaderStageCount++] = to_internal(pso->desc.gs)->stageInfo;
-				}
-				if (pso->desc.ps != nullptr && pso->desc.ps->IsValid())
-				{
-					shaderStages[shaderStageCount++] = to_internal(pso->desc.ps)->stageInfo;
-				}
-				pipelineInfo.stageCount = shaderStageCount;
-				pipelineInfo.pStages = shaderStages;
-
-
-				// Fixed function states:
-
-				// Input layout:
-				VkPipelineVertexInputStateCreateInfo vertexInputInfo = {};
-				vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-				std::vector<VkVertexInputBindingDescription> bindings;
-				std::vector<VkVertexInputAttributeDescription> attributes;
-				if (pso->desc.il != nullptr)
-				{
-					uint32_t lastBinding = 0xFFFFFFFF;
-					for (auto& x : pso->desc.il->elements)
-					{
-						VkVertexInputBindingDescription bind = {};
-						bind.binding = x.InputSlot;
-						bind.inputRate = x.InputSlotClass == INPUT_PER_VERTEX_DATA ? VK_VERTEX_INPUT_RATE_VERTEX : VK_VERTEX_INPUT_RATE_INSTANCE;
-						bind.stride = x.AlignedByteOffset;
-						if (bind.stride == InputLayout::APPEND_ALIGNED_ELEMENT)
-						{
-							// need to manually resolve this from the format spec.
-							bind.stride = GetFormatStride(x.Format);
-						}
-
-						if (lastBinding != bind.binding)
-						{
-							bindings.push_back(bind);
-							lastBinding = bind.binding;
-						}
-						else
-						{
-							bindings.back().stride += bind.stride;
-						}
-					}
-
-					uint32_t offset = 0;
-					uint32_t i = 0;
-					lastBinding = 0xFFFFFFFF;
-					for (auto& x : pso->desc.il->elements)
-					{
-						VkVertexInputAttributeDescription attr = {};
-						attr.binding = x.InputSlot;
-						if (attr.binding != lastBinding)
-						{
-							lastBinding = attr.binding;
-							offset = 0;
-						}
-						attr.format = _ConvertFormat(x.Format);
-						attr.location = i;
-						attr.offset = x.AlignedByteOffset;
-						if (attr.offset == InputLayout::APPEND_ALIGNED_ELEMENT)
-						{
-							// need to manually resolve this from the format spec.
-							attr.offset = offset;
-							offset += GetFormatStride(x.Format);
-						}
-
-						attributes.push_back(attr);
-
-						i++;
-					}
-
-					vertexInputInfo.vertexBindingDescriptionCount = static_cast<uint32_t>(bindings.size());
-					vertexInputInfo.pVertexBindingDescriptions = bindings.data();
-					vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributes.size());
-					vertexInputInfo.pVertexAttributeDescriptions = attributes.data();
-				}
-				pipelineInfo.pVertexInputState = &vertexInputInfo;
-
-				// Primitive type:
-				VkPipelineInputAssemblyStateCreateInfo inputAssembly = {};
-				inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-				switch (pso->desc.pt)
-				{
-				case POINTLIST:
-					inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
-					break;
-				case LINELIST:
-					inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
-					break;
-				case LINESTRIP:
-					inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
-					break;
-				case TRIANGLESTRIP:
-					inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
-					break;
-				case TRIANGLELIST:
-					inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-					break;
-				case PATCHLIST:
-					inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
-					break;
-				default:
-					break;
-				}
-				inputAssembly.primitiveRestartEnable = VK_FALSE;
-
-				pipelineInfo.pInputAssemblyState = &inputAssembly;
-
-
-				// Rasterizer:
-				VkPipelineRasterizationStateCreateInfo rasterizer = {};
-				rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-				rasterizer.depthClampEnable = VK_TRUE;
-				rasterizer.rasterizerDiscardEnable = VK_FALSE;
-				rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
-				rasterizer.lineWidth = 1.0f;
-				rasterizer.cullMode = VK_CULL_MODE_NONE;
-				rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
-				rasterizer.depthBiasEnable = VK_FALSE;
-				rasterizer.depthBiasConstantFactor = 0.0f;
-				rasterizer.depthBiasClamp = 0.0f;
-				rasterizer.depthBiasSlopeFactor = 0.0f;
-
-				// depth clip will be enabled via Vulkan 1.1 extension VK_EXT_depth_clip_enable:
-				VkPipelineRasterizationDepthClipStateCreateInfoEXT depthclip = {};
-				depthclip.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_DEPTH_CLIP_STATE_CREATE_INFO_EXT;
-				depthclip.depthClipEnable = VK_TRUE;
-				rasterizer.pNext = &depthclip;
-
-				if (pso->desc.rs != nullptr)
-				{
-					const RasterizerState& desc = *pso->desc.rs;
-
-					switch (desc.FillMode)
-					{
-					case FILL_WIREFRAME:
-						rasterizer.polygonMode = VK_POLYGON_MODE_LINE;
-						break;
-					case FILL_SOLID:
-					default:
-						rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
-						break;
-					}
-
-					switch (desc.CullMode)
-					{
-					case CULL_BACK:
-						rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
-						break;
-					case CULL_FRONT:
-						rasterizer.cullMode = VK_CULL_MODE_FRONT_BIT;
-						break;
-					case CULL_NONE:
-					default:
-						rasterizer.cullMode = VK_CULL_MODE_NONE;
-						break;
-					}
-
-					rasterizer.frontFace = desc.FrontCounterClockwise ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE;
-					rasterizer.depthBiasEnable = desc.DepthBias != 0 || desc.SlopeScaledDepthBias != 0;
-					rasterizer.depthBiasConstantFactor = static_cast<float>(desc.DepthBias);
-					rasterizer.depthBiasClamp = desc.DepthBiasClamp;
-					rasterizer.depthBiasSlopeFactor = desc.SlopeScaledDepthBias;
-
-					// depth clip is extension in Vulkan 1.1:
-					depthclip.depthClipEnable = desc.DepthClipEnable ? VK_TRUE : VK_FALSE;
-				}
-
-				pipelineInfo.pRasterizationState = &rasterizer;
-
-
-				// Viewport, Scissor:
-				VkViewport viewport = {};
-				viewport.x = 0;
-				viewport.y = 0;
-				viewport.width = 65535;
-				viewport.height = 65535;
-				viewport.minDepth = 0;
-				viewport.maxDepth = 1;
-
-				VkRect2D scissor = {};
-				scissor.extent.width = 65535;
-				scissor.extent.height = 65535;
-
-				VkPipelineViewportStateCreateInfo viewportState = {};
-				viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-				viewportState.viewportCount = 1;
-				viewportState.pViewports = &viewport;
-				viewportState.scissorCount = 1;
-				viewportState.pScissors = &scissor;
-
-				pipelineInfo.pViewportState = &viewportState;
-
-
-				// Depth-Stencil:
-				VkPipelineDepthStencilStateCreateInfo depthstencil = {};
-				depthstencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-				if (pso->desc.dss != nullptr)
-				{
-					depthstencil.depthTestEnable = pso->desc.dss->DepthEnable ? VK_TRUE : VK_FALSE;
-					depthstencil.depthWriteEnable = pso->desc.dss->DepthWriteMask == DEPTH_WRITE_MASK_ZERO ? VK_FALSE : VK_TRUE;
-					depthstencil.depthCompareOp = _ConvertComparisonFunc(pso->desc.dss->DepthFunc);
-
-					depthstencil.stencilTestEnable = pso->desc.dss->StencilEnable ? VK_TRUE : VK_FALSE;
-
-					depthstencil.front.compareMask = pso->desc.dss->StencilReadMask;
-					depthstencil.front.writeMask = pso->desc.dss->StencilWriteMask;
-					depthstencil.front.reference = 0; // runtime supplied
-					depthstencil.front.compareOp = _ConvertComparisonFunc(pso->desc.dss->FrontFace.StencilFunc);
-					depthstencil.front.passOp = _ConvertStencilOp(pso->desc.dss->FrontFace.StencilPassOp);
-					depthstencil.front.failOp = _ConvertStencilOp(pso->desc.dss->FrontFace.StencilFailOp);
-					depthstencil.front.depthFailOp = _ConvertStencilOp(pso->desc.dss->FrontFace.StencilDepthFailOp);
-
-					depthstencil.back.compareMask = pso->desc.dss->StencilReadMask;
-					depthstencil.back.writeMask = pso->desc.dss->StencilWriteMask;
-					depthstencil.back.reference = 0; // runtime supplied
-					depthstencil.back.compareOp = _ConvertComparisonFunc(pso->desc.dss->BackFace.StencilFunc);
-					depthstencil.back.passOp = _ConvertStencilOp(pso->desc.dss->BackFace.StencilPassOp);
-					depthstencil.back.failOp = _ConvertStencilOp(pso->desc.dss->BackFace.StencilFailOp);
-					depthstencil.back.depthFailOp = _ConvertStencilOp(pso->desc.dss->BackFace.StencilDepthFailOp);
-
-					depthstencil.depthBoundsTestEnable = VK_FALSE;
-				}
-
-				pipelineInfo.pDepthStencilState = &depthstencil;
-
 
 				// MSAA:
 				VkPipelineMultisampleStateCreateInfo multisampling = {};
 				multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
 				multisampling.sampleShadingEnable = VK_FALSE;
 				multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-				if (active_renderpass[cmd] != nullptr && active_renderpass[cmd]->desc.attachments.size() > 0)
+				if (active_renderpass[cmd]->desc.attachments.size() > 0 && active_renderpass[cmd]->desc.attachments[0].texture != nullptr)
 				{
 					multisampling.rasterizationSamples = (VkSampleCountFlagBits)active_renderpass[cmd]->desc.attachments[0].texture->desc.SampleCount;
 				}
@@ -1872,7 +1804,8 @@ using namespace Vulkan_Internal;
 					}
 				}
 				multisampling.minSampleShading = 1.0f;
-				VkSampleMask samplemask = pso->desc.sampleMask;
+				VkSampleMask samplemask = internal_state->samplemask;
+				samplemask = pso->desc.sampleMask;
 				multisampling.pSampleMask = &samplemask;
 				multisampling.alphaToCoverageEnable = VK_FALSE;
 				multisampling.alphaToOneEnable = VK_FALSE;
@@ -1882,11 +1815,11 @@ using namespace Vulkan_Internal;
 
 				// Blending:
 				uint32_t numBlendAttachments = 0;
-				VkPipelineColorBlendAttachmentState colorBlendAttachments[8];
-				const size_t blend_loopCount = active_renderpass[cmd] == nullptr ? 1 : active_renderpass[cmd]->desc.attachments.size();
+				VkPipelineColorBlendAttachmentState colorBlendAttachments[8] = {};
+				const size_t blend_loopCount = active_renderpass[cmd]->desc.attachments.size();
 				for (size_t i = 0; i < blend_loopCount; ++i)
 				{
-					if (active_renderpass[cmd] != nullptr && active_renderpass[cmd]->desc.attachments[i].type != RenderPassAttachment::RENDERTARGET)
+					if (active_renderpass[cmd]->desc.attachments[i].type != RenderPassAttachment::RENDERTARGET)
 					{
 						continue;
 					}
@@ -1936,16 +1869,58 @@ using namespace Vulkan_Internal;
 
 				pipelineInfo.pColorBlendState = &colorBlending;
 
+				// Input layout:
+				VkPipelineVertexInputStateCreateInfo vertexInputInfo = {};
+				vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+				std::vector<VkVertexInputBindingDescription> bindings;
+				std::vector<VkVertexInputAttributeDescription> attributes;
+				if (pso->desc.il != nullptr)
+				{
+					uint32_t lastBinding = 0xFFFFFFFF;
+					for (auto& x : pso->desc.il->elements)
+					{
+						if (x.InputSlot == lastBinding)
+							continue;
+						lastBinding = x.InputSlot;
+						VkVertexInputBindingDescription& bind = bindings.emplace_back();
+						bind.binding = x.InputSlot;
+						bind.inputRate = x.InputSlotClass == INPUT_PER_VERTEX_DATA ? VK_VERTEX_INPUT_RATE_VERTEX : VK_VERTEX_INPUT_RATE_INSTANCE;
+						bind.stride = vb_strides[cmd][x.InputSlot];
+					}
 
-				// Tessellation:
-				VkPipelineTessellationStateCreateInfo tessellationInfo = {};
-				tessellationInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO;
-				tessellationInfo.patchControlPoints = 3;
+					uint32_t offset = 0;
+					uint32_t i = 0;
+					lastBinding = 0xFFFFFFFF;
+					for (auto& x : pso->desc.il->elements)
+					{
+						VkVertexInputAttributeDescription attr = {};
+						attr.binding = x.InputSlot;
+						if (attr.binding != lastBinding)
+						{
+							lastBinding = attr.binding;
+							offset = 0;
+						}
+						attr.format = _ConvertFormat(x.Format);
+						attr.location = i;
+						attr.offset = x.AlignedByteOffset;
+						if (attr.offset == InputLayout::APPEND_ALIGNED_ELEMENT)
+						{
+							// need to manually resolve this from the format spec.
+							attr.offset = offset;
+							offset += GetFormatStride(x.Format);
+						}
 
-				pipelineInfo.pTessellationState = &tessellationInfo;
+						attributes.push_back(attr);
 
+						i++;
+					}
 
-				pipelineInfo.pDynamicState = &dynamicStateInfo;
+					vertexInputInfo.vertexBindingDescriptionCount = static_cast<uint32_t>(bindings.size());
+					vertexInputInfo.pVertexBindingDescriptions = bindings.data();
+					vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributes.size());
+					vertexInputInfo.pVertexAttributeDescriptions = attributes.data();
+				}
+				pipelineInfo.pVertexInputState = &vertexInputInfo;
 
 				VkResult res = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline);
 				assert(res == VK_SUCCESS);
@@ -1959,109 +1934,135 @@ using namespace Vulkan_Internal;
 		}
 		assert(pipeline != VK_NULL_HANDLE);
 
-		vkCmdBindPipeline(GetDirectCommandList(cmd), VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+		vkCmdBindPipeline(GetCommandList(cmd), VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 	}
 
+	void GraphicsDevice_Vulkan::barrier_flush(CommandList cmd)
+	{
+		auto& memoryBarriers = frame_memoryBarriers[cmd];
+		auto& imageBarriers = frame_imageBarriers[cmd];
+		auto& bufferBarriers = frame_bufferBarriers[cmd];
+
+		if (!memoryBarriers.empty() ||
+			!bufferBarriers.empty() ||
+			!imageBarriers.empty()
+			)
+		{
+			// Remove NOP barriers:
+			for (size_t i = 0; i < memoryBarriers.size(); ++i)
+			{
+				auto& barrier = memoryBarriers[i];
+				if (barrier.srcAccessMask == barrier.dstAccessMask)
+				{
+					barrier = memoryBarriers.back();
+					memoryBarriers.pop_back();
+					i--;
+				}
+			}
+			for (size_t i = 0; i < bufferBarriers.size(); ++i)
+			{
+				auto& barrier = bufferBarriers[i];
+				if (barrier.srcAccessMask == barrier.dstAccessMask)
+				{
+					barrier = bufferBarriers.back();
+					bufferBarriers.pop_back();
+					i--;
+				}
+			}
+			for (size_t i = 0; i < imageBarriers.size(); ++i)
+			{
+				auto& barrier = imageBarriers[i];
+				if (barrier.oldLayout == barrier.newLayout)
+				{
+					barrier = imageBarriers.back();
+					imageBarriers.pop_back();
+					i--;
+				}
+			}
+
+			if (!memoryBarriers.empty() ||
+				!bufferBarriers.empty() ||
+				!imageBarriers.empty()
+				)
+			{
+				VkPipelineStageFlags srcStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+				VkPipelineStageFlags dstStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+
+				if (CheckCapability(GRAPHICSDEVICE_CAPABILITY_RAYTRACING_PIPELINE) || CheckCapability(GRAPHICSDEVICE_CAPABILITY_RAYTRACING_INLINE))
+				{
+					srcStage |= VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
+					dstStage |= VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
+				}
+
+				vkCmdPipelineBarrier(
+					GetCommandList(cmd),
+					srcStage,
+					dstStage,
+					0,
+					(uint32_t)memoryBarriers.size(), memoryBarriers.data(),
+					(uint32_t)bufferBarriers.size(), bufferBarriers.data(),
+					(uint32_t)imageBarriers.size(), imageBarriers.data()
+				);
+
+				memoryBarriers.clear();
+				imageBarriers.clear();
+				bufferBarriers.clear();
+			}
+		}
+	}
 	void GraphicsDevice_Vulkan::predraw(CommandList cmd)
 	{
 		pso_validate(cmd);
 
-		if (active_pso[cmd]->desc.rootSignature == nullptr)
+		GetFrameResources().descriptors[cmd].flush(true, cmd);
+
+		if (pushconstants[cmd].size > 0)
 		{
-			GetFrameResources().descriptors[cmd].validate(true, cmd);
-		}
-		else
-		{
-			auto rootsig_internal = to_internal(active_pso[cmd]->desc.rootSignature);
-			if (rootsig_internal->dirty[cmd])
+			auto pso_internal = to_internal(active_pso[cmd]);
+			if (pso_internal->pushconstants.size > 0)
 			{
-				rootsig_internal->dirty[cmd] = false;
-				vkCmdBindDescriptorSets(
-					GetDirectCommandList(cmd),
-					VK_PIPELINE_BIND_POINT_GRAPHICS,
-					rootsig_internal->pipelineLayout,
-					0,
-					(uint32_t)rootsig_internal->last_descriptorsets[cmd].size(),
-					rootsig_internal->last_descriptorsets[cmd].data(),
-					(uint32_t)rootsig_internal->root_offsets[cmd].size(),
-					rootsig_internal->root_offsets[cmd].data()
+				vkCmdPushConstants(
+					GetCommandList(cmd),
+					pso_internal->pipelineLayout,
+					pso_internal->pushconstants.stageFlags,
+					pso_internal->pushconstants.offset,
+					pso_internal->pushconstants.size,
+					pushconstants[cmd].data
 				);
+				pushconstants[cmd].size = 0;
 			}
 		}
 	}
 	void GraphicsDevice_Vulkan::predispatch(CommandList cmd)
 	{
-		if (active_cs[cmd]->rootSignature == nullptr)
-		{
-			GetFrameResources().descriptors[cmd].validate(false, cmd);
-		}
-		else
-		{
-			auto rootsig_internal = to_internal(active_cs[cmd]->rootSignature);
-			if (rootsig_internal->dirty[cmd])
-			{
-				rootsig_internal->dirty[cmd] = false;
-				vkCmdBindDescriptorSets(
-					GetDirectCommandList(cmd),
-					VK_PIPELINE_BIND_POINT_COMPUTE,
-					rootsig_internal->pipelineLayout,
-					0,
-					(uint32_t)rootsig_internal->last_descriptorsets[cmd].size(),
-					rootsig_internal->last_descriptorsets[cmd].data(),
-					(uint32_t)rootsig_internal->root_offsets[cmd].size(),
-					rootsig_internal->root_offsets[cmd].data()
-				);
-			}
-		}
+		barrier_flush(cmd);
 
-	}
-	void GraphicsDevice_Vulkan::preraytrace(CommandList cmd)
-	{
-		if (active_rt[cmd]->desc.rootSignature == nullptr)
+		GetFrameResources().descriptors[cmd].flush(false, cmd);
+
+		if (pushconstants[cmd].size > 0)
 		{
-			GetFrameResources().descriptors[cmd].validate(false, cmd, true);
-		}
-		else
-		{
-			auto rootsig_internal = to_internal(active_rt[cmd]->desc.rootSignature);
-			if (rootsig_internal->dirty[cmd])
+			auto cs_internal = to_internal(active_cs[cmd]);
+			if (cs_internal->pushconstants.size > 0)
 			{
-				rootsig_internal->dirty[cmd] = false;
-				vkCmdBindDescriptorSets(
-					GetDirectCommandList(cmd),
-					VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
-					rootsig_internal->pipelineLayout,
-					0,
-					(uint32_t)rootsig_internal->last_descriptorsets[cmd].size(),
-					rootsig_internal->last_descriptorsets[cmd].data(),
-					(uint32_t)rootsig_internal->root_offsets[cmd].size(),
-					rootsig_internal->root_offsets[cmd].data()
+				vkCmdPushConstants(
+					GetCommandList(cmd),
+					cs_internal->pipelineLayout_cs,
+					cs_internal->pushconstants.stageFlags,
+					cs_internal->pushconstants.offset,
+					cs_internal->pushconstants.size,
+					pushconstants[cmd].data
 				);
+				pushconstants[cmd].size = 0;
 			}
 		}
 	}
 
 	// Engine functions
-	GraphicsDevice_Vulkan::GraphicsDevice_Vulkan(wiPlatform::window_type window, bool fullscreen, bool debuglayer)
+	GraphicsDevice_Vulkan::GraphicsDevice_Vulkan(wiPlatform::window_type window, bool debuglayer)
 	{
-		capabilities |= GRAPHICSDEVICE_CAPABILITY_DESCRIPTOR_MANAGEMENT;
 		TOPLEVEL_ACCELERATION_STRUCTURE_INSTANCE_SIZE = sizeof(VkAccelerationStructureInstanceKHR);
 
 		DEBUGDEVICE = debuglayer;
-
-		FULLSCREEN = fullscreen;
-
-#ifdef _WIN32
-		RECT rect;
-		GetClientRect(window, &rect);
-		RESOLUTIONWIDTH = rect.right - rect.left;
-		RESOLUTIONHEIGHT = rect.bottom - rect.top;
-#elif SDL2
-		int width, height;
-		SDL_GetWindowSize(window, &width, &height);
-		RESOLUTIONWIDTH = width;
-		RESOLUTIONHEIGHT = height;
-#endif // _WIN32
 
 		VkResult res;
 
@@ -2145,31 +2146,6 @@ using namespace Vulkan_Internal;
 			assert(res == VK_SUCCESS);
 		}
 
-
-		// Surface creation:
-		{
-#ifdef _WIN32
-			VkWin32SurfaceCreateInfoKHR createInfo = {};
-			createInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
-			createInfo.hwnd = window;
-			createInfo.hinstance = GetModuleHandle(nullptr);
-
-			auto CreateWin32SurfaceKHR = (PFN_vkCreateWin32SurfaceKHR)vkGetInstanceProcAddr(instance, "vkCreateWin32SurfaceKHR");
-
-			if (!CreateWin32SurfaceKHR || CreateWin32SurfaceKHR(instance, &createInfo, nullptr, &surface) != VK_SUCCESS) {
-				assert(0);
-			}
-#elif SDL2
-			if (!SDL_Vulkan_CreateSurface(window, instance, &surface))
-			{
-				throw sdl2::SDLError("Error creating a vulkan surface");
-			}
-#else
-#error WICKEDENGINE VULKAN DEVICE ERROR: PLATFORM NOT SUPPORTED
-#endif // _WIN32
-		}
-
-
 		// Enumerating and creating devices:
 		{
 			uint32_t deviceCount = 0;
@@ -2191,7 +2167,7 @@ using namespace Vulkan_Internal;
 			};
 			std::vector<const char*> enabled_deviceExtensions;
 
-			for (const auto& dev : devices) 
+			for (const auto& dev : devices)
 			{
 				bool suitable = true;
 
@@ -2212,130 +2188,101 @@ using namespace Vulkan_Internal;
 				if (!suitable)
 					continue;
 
-				// Swapchain query:
-				res = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(dev, surface, &swapchain_capabilities);
-				assert(res == VK_SUCCESS);
+				features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+				features_1_1.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+				features_1_2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+				features2.pNext = &features_1_1;
+				features_1_1.pNext = &features_1_2;
+				void** features_chain = &features_1_2.pNext;
+				acceleration_structure_features = {};
+				raytracing_features = {};
+				raytracing_query_features = {};
+				fragment_shading_rate_features = {};
+				mesh_shader_features = {};
 
-				uint32_t formatCount;
-				res = vkGetPhysicalDeviceSurfaceFormatsKHR(dev, surface, &formatCount, nullptr);
-				assert(res == VK_SUCCESS);
+				properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+				properties_1_1.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES;
+				properties_1_2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES;
+				properties2.pNext = &properties_1_1;
+				properties_1_1.pNext = &properties_1_2;
+				void** properties_chain = &properties_1_2.pNext;
+				acceleration_structure_properties = {};
+				raytracing_properties = {};
+				fragment_shading_rate_properties = {};
+				mesh_shader_properties = {};
 
-				if (formatCount != 0)
+				enabled_deviceExtensions = required_deviceExtensions;
+
+				if (checkExtensionSupport(VK_KHR_SPIRV_1_4_EXTENSION_NAME, available_deviceExtensions))
 				{
-					swapchain_formats.resize(formatCount);
-					res = vkGetPhysicalDeviceSurfaceFormatsKHR(dev, surface, &formatCount, swapchain_formats.data());
-					assert(res == VK_SUCCESS);
+					enabled_deviceExtensions.push_back(VK_KHR_SPIRV_1_4_EXTENSION_NAME);
 				}
 
-				uint32_t presentModeCount;
-				res = vkGetPhysicalDeviceSurfacePresentModesKHR(dev, surface, &presentModeCount, nullptr);
-				assert(res == VK_SUCCESS);
+				if (checkExtensionSupport(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, available_deviceExtensions))
+				{
+					enabled_deviceExtensions.push_back(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+					assert(checkExtensionSupport(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME, available_deviceExtensions));
+					enabled_deviceExtensions.push_back(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+					acceleration_structure_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+					*features_chain = &acceleration_structure_features;
+					features_chain = &acceleration_structure_features.pNext;
+					acceleration_structure_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR;
+					*properties_chain = &acceleration_structure_properties;
+					properties_chain = &acceleration_structure_properties.pNext;
 
-				if (presentModeCount != 0) {
-					swapchain_presentModes.resize(presentModeCount);
-					res = vkGetPhysicalDeviceSurfacePresentModesKHR(dev, surface, &presentModeCount, swapchain_presentModes.data());
-					assert(res == VK_SUCCESS);
+					if (checkExtensionSupport(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME, available_deviceExtensions))
+					{
+						enabled_deviceExtensions.push_back(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
+						enabled_deviceExtensions.push_back(VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME);
+						raytracing_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
+						*features_chain = &raytracing_features;
+						features_chain = &raytracing_features.pNext;
+						raytracing_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
+						*properties_chain = &raytracing_properties;
+						properties_chain = &raytracing_properties.pNext;
+					}
+
+					if (checkExtensionSupport(VK_KHR_RAY_QUERY_EXTENSION_NAME, available_deviceExtensions))
+					{
+						enabled_deviceExtensions.push_back(VK_KHR_RAY_QUERY_EXTENSION_NAME);
+						raytracing_query_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+						*features_chain = &raytracing_query_features;
+						features_chain = &raytracing_query_features.pNext;
+					}
 				}
 
-				suitable = !swapchain_formats.empty() && !swapchain_presentModes.empty();
-
-				if (suitable) 
+				if (!DEBUGDEVICE && checkExtensionSupport(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME, available_deviceExtensions))
 				{
-					features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-					features_1_1.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
-					features_1_2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-					features2.pNext = &features_1_1;
-					features_1_1.pNext = &features_1_2;
-					void** features_chain = &features_1_2.pNext;
-					acceleration_structure_features = {};
-					raytracing_features = {};
-					raytracing_query_features = {};
-					fragment_shading_rate_features = {};
-					mesh_shader_features = {};
+					// Note: VRS will crash vulkan validation layers: https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/2473
+					enabled_deviceExtensions.push_back(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);
+					fragment_shading_rate_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR;
+					*features_chain = &fragment_shading_rate_features;
+					features_chain = &fragment_shading_rate_features.pNext;
+					fragment_shading_rate_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_PROPERTIES_KHR;
+					*properties_chain = &fragment_shading_rate_properties;
+					properties_chain = &fragment_shading_rate_properties.pNext;
+				}
 
-					properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
-					properties_1_1.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES;
-					properties_1_2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES;
-					properties2.pNext = &properties_1_1;
-					properties_1_1.pNext = &properties_1_2;
-					void** properties_chain = &properties_1_2.pNext;
-					acceleration_structure_properties = {};
-					raytracing_properties = {};
-					fragment_shading_rate_properties = {};
-					mesh_shader_properties = {};
+				if (checkExtensionSupport(VK_NV_MESH_SHADER_EXTENSION_NAME, available_deviceExtensions))
+				{
+					enabled_deviceExtensions.push_back(VK_NV_MESH_SHADER_EXTENSION_NAME);
+					mesh_shader_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_NV;
+					*features_chain = &mesh_shader_features;
+					features_chain = &mesh_shader_features.pNext;
+					mesh_shader_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_PROPERTIES_NV;
+					*properties_chain = &mesh_shader_properties;
+					properties_chain = &mesh_shader_properties.pNext;
+				}
 
-					enabled_deviceExtensions = required_deviceExtensions;
+				vkGetPhysicalDeviceProperties2(dev, &properties2);
 
-					if (checkExtensionSupport(VK_KHR_SPIRV_1_4_EXTENSION_NAME, available_deviceExtensions))
+				bool discrete = properties2.properties.deviceType == VkPhysicalDeviceType::VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+				if (discrete || physicalDevice == VK_NULL_HANDLE)
+				{
+					physicalDevice = dev;
+					if (discrete)
 					{
-						enabled_deviceExtensions.push_back(VK_KHR_SPIRV_1_4_EXTENSION_NAME);
-					}
-
-					if (checkExtensionSupport(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, available_deviceExtensions))
-					{
-						enabled_deviceExtensions.push_back(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
-						acceleration_structure_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
-						*features_chain = &acceleration_structure_features;
-						features_chain = &acceleration_structure_features.pNext;
-						acceleration_structure_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR;
-						*properties_chain = &acceleration_structure_properties;
-						properties_chain = &acceleration_structure_properties.pNext;
-
-						if (checkExtensionSupport(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME, available_deviceExtensions))
-						{
-							enabled_deviceExtensions.push_back(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
-							enabled_deviceExtensions.push_back(VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME);
-							raytracing_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
-							*features_chain = &raytracing_features;
-							features_chain = &raytracing_features.pNext;
-							raytracing_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
-							*properties_chain = &raytracing_properties;
-							properties_chain = &raytracing_properties.pNext;
-						}
-
-						if (checkExtensionSupport(VK_KHR_RAY_QUERY_EXTENSION_NAME, available_deviceExtensions))
-						{
-							enabled_deviceExtensions.push_back(VK_KHR_RAY_QUERY_EXTENSION_NAME);
-							enabled_deviceExtensions.push_back(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
-							raytracing_query_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
-							*features_chain = &raytracing_query_features;
-							features_chain = &raytracing_query_features.pNext;
-						}
-					}
-
-					if (!DEBUGDEVICE && checkExtensionSupport(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME, available_deviceExtensions))
-					{
-						// Note: VRS will crash vulkan validation layers: https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/2473
-						enabled_deviceExtensions.push_back(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);
-						fragment_shading_rate_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR;
-						*features_chain = &fragment_shading_rate_features;
-						features_chain = &fragment_shading_rate_features.pNext;
-						fragment_shading_rate_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_PROPERTIES_KHR;
-						*properties_chain = &fragment_shading_rate_properties;
-						properties_chain = &fragment_shading_rate_properties.pNext;
-					}
-
-					if (checkExtensionSupport(VK_NV_MESH_SHADER_EXTENSION_NAME, available_deviceExtensions))
-					{
-						enabled_deviceExtensions.push_back(VK_NV_MESH_SHADER_EXTENSION_NAME);
-						mesh_shader_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_NV;
-						*features_chain = &mesh_shader_features;
-						features_chain = &mesh_shader_features.pNext;
-						mesh_shader_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_PROPERTIES_NV;
-						*properties_chain = &mesh_shader_properties;
-						properties_chain = &mesh_shader_properties.pNext;
-					}
-
-					vkGetPhysicalDeviceProperties2(dev, &properties2);
-
-					bool discrete = properties2.properties.deviceType == VkPhysicalDeviceType::VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
-					if (discrete || physicalDevice == VK_NULL_HANDLE)
-					{
-						physicalDevice = dev;
-						if (discrete)
-						{
-							break; // if this is discrete GPU, look no further (prioritize discrete GPU)
-						}
+						break; // if this is discrete GPU, look no further (prioritize discrete GPU)
 					}
 				}
 			}
@@ -2371,7 +2318,8 @@ using namespace Vulkan_Internal;
 			{
 				assert(acceleration_structure_features.accelerationStructure == VK_TRUE);
 				assert(features_1_2.bufferDeviceAddress == VK_TRUE);
-				capabilities |= GRAPHICSDEVICE_CAPABILITY_RAYTRACING;
+				capabilities |= GRAPHICSDEVICE_CAPABILITY_RAYTRACING_PIPELINE;
+				capabilities |= GRAPHICSDEVICE_CAPABILITY_RAYTRACING_GEOMETRYINDEX;
 				SHADER_IDENTIFIER_SIZE = raytracing_properties.shaderGroupHandleSize;
 			}
 			if (raytracing_query_features.rayQuery == VK_TRUE)
@@ -2379,6 +2327,7 @@ using namespace Vulkan_Internal;
 				assert(acceleration_structure_features.accelerationStructure == VK_TRUE);
 				assert(features_1_2.bufferDeviceAddress == VK_TRUE);
 				capabilities |= GRAPHICSDEVICE_CAPABILITY_RAYTRACING_INLINE;
+				capabilities |= GRAPHICSDEVICE_CAPABILITY_RAYTRACING_GEOMETRYINDEX;
 			}
 			if (mesh_shader_features.meshShader == VK_TRUE && mesh_shader_features.taskShader == VK_TRUE)
 			{
@@ -2412,30 +2361,25 @@ using namespace Vulkan_Internal;
 			uint32_t queueFamilyCount = 0;
 			vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, nullptr);
 
-			std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
+			queueFamilies.resize(queueFamilyCount);
 			vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, queueFamilies.data());
 
 			// Query base queue families:
 			int familyIndex = 0;
 			for (const auto& queueFamily : queueFamilies)
 			{
-				VkBool32 presentSupport = false;
-				VkResult res = vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice, (uint32_t)familyIndex, surface, &presentSupport);
-				assert(res == VK_SUCCESS);
-
-				if (presentFamily < 0 && queueFamily.queueCount > 0 && presentSupport) {
-					presentFamily = familyIndex;
-				}
-
-				if (graphicsFamily < 0 && queueFamily.queueCount > 0 && queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+				if (graphicsFamily < 0 && queueFamily.queueCount > 0 && queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT)
+				{
 					graphicsFamily = familyIndex;
 				}
 
-				if (copyFamily < 0 && queueFamily.queueCount > 0 && queueFamily.queueFlags & VK_QUEUE_TRANSFER_BIT) {
+				if (copyFamily < 0 && queueFamily.queueCount > 0 && queueFamily.queueFlags & VK_QUEUE_TRANSFER_BIT)
+				{
 					copyFamily = familyIndex;
 				}
 
-				if (computeFamily < 0 && queueFamily.queueCount > 0 && queueFamily.queueFlags & VK_QUEUE_COMPUTE_BIT) {
+				if (computeFamily < 0 && queueFamily.queueCount > 0 && queueFamily.queueFlags & VK_QUEUE_COMPUTE_BIT)
+				{
 					computeFamily = familyIndex;
 				}
 
@@ -2465,7 +2409,7 @@ using namespace Vulkan_Internal;
 			}
 
 			std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
-			std::set<int> uniqueQueueFamilies = { graphicsFamily, presentFamily, copyFamily, computeFamily };
+			std::set<int> uniqueQueueFamilies = { graphicsFamily, copyFamily, computeFamily };
 
 			float queuePriority = 1.0f;
 			for (int queueFamily : uniqueQueueFamilies)
@@ -2476,29 +2420,17 @@ using namespace Vulkan_Internal;
 				queueCreateInfo.queueCount = 1;
 				queueCreateInfo.pQueuePriorities = &queuePriority;
 				queueCreateInfos.push_back(queueCreateInfo);
+				families.push_back((uint32_t)queueFamily);
 			}
 
 			VkDeviceCreateInfo createInfo = {};
 			createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-
-			createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
+			createInfo.queueCreateInfoCount = (uint32_t)queueCreateInfos.size();
 			createInfo.pQueueCreateInfos = queueCreateInfos.data();
-
 			createInfo.pEnabledFeatures = nullptr;
 			createInfo.pNext = &features2;
-
 			createInfo.enabledExtensionCount = static_cast<uint32_t>(enabled_deviceExtensions.size());
 			createInfo.ppEnabledExtensionNames = enabled_deviceExtensions.data();
-
-			if (debuglayer)
-			{
-				createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
-				createInfo.ppEnabledLayerNames = validationLayers.data();
-			}
-			else
-			{
-				createInfo.enabledLayerCount = 0;
-			}
 
 			res = vkCreateDevice(physicalDevice, &createInfo, nullptr, &device);
 			assert(res == VK_SUCCESS);
@@ -2506,10 +2438,32 @@ using namespace Vulkan_Internal;
 			volkLoadDevice(device);
 
 			vkGetDeviceQueue(device, graphicsFamily, 0, &graphicsQueue);
-			vkGetDeviceQueue(device, presentFamily, 0, &presentQueue);
-			vkGetDeviceQueue(device, copyFamily, 0, &copyQueue);
 			vkGetDeviceQueue(device, computeFamily, 0, &computeQueue);
+			vkGetDeviceQueue(device, copyFamily, 0, &copyQueue);
 		}
+
+		// queues:
+		{
+			queues[QUEUE_GRAPHICS].queue = graphicsQueue;
+			queues[QUEUE_COMPUTE].queue = computeQueue;
+
+			VkSemaphoreTypeCreateInfo timelineCreateInfo = {};
+			timelineCreateInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
+			timelineCreateInfo.pNext = nullptr;
+			timelineCreateInfo.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+			timelineCreateInfo.initialValue = 0;
+
+			VkSemaphoreCreateInfo createInfo = {};
+			createInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+			createInfo.pNext = &timelineCreateInfo;
+			createInfo.flags = 0;
+
+			res = vkCreateSemaphore(device, &createInfo, nullptr, &queues[QUEUE_GRAPHICS].semaphore);
+			assert(res == VK_SUCCESS);
+			res = vkCreateSemaphore(device, &createInfo, nullptr, &queues[QUEUE_COMPUTE].semaphore);
+			assert(res == VK_SUCCESS);
+		}
+
 
 		allocationhandler = std::make_shared<AllocationHandler>();
 		allocationhandler->device = device;
@@ -2527,17 +2481,17 @@ using namespace Vulkan_Internal;
 		res = vmaCreateAllocator(&allocatorInfo, &allocationhandler->allocator);
 		assert(res == VK_SUCCESS);
 
-		CreateBackBufferResources();
+		copyAllocator.init(this);
 
 		// Create frame resources:
-		for (uint32_t fr = 0; fr < BACKBUFFER_COUNT; ++fr)
+		for (uint32_t fr = 0; fr < BUFFERCOUNT; ++fr)
 		{
-			// Fence:
+			for (int queue = 0; queue < QUEUE_COUNT; ++queue)
 			{
 				VkFenceCreateInfo fenceInfo = {};
 				fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
 				//fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-				VkResult res = vkCreateFence(device, &fenceInfo, nullptr, &frames[fr].frameFence);
+				VkResult res = vkCreateFence(device, &fenceInfo, nullptr, &frames[fr].fence[queue]);
 				assert(res == VK_SUCCESS);
 			}
 
@@ -2568,53 +2522,7 @@ using namespace Vulkan_Internal;
 				res = vkBeginCommandBuffer(frames[fr].transitionCommandBuffer, &beginInfo);
 				assert(res == VK_SUCCESS);
 			}
-
-			// Create resources for copy (transfer) queue:
-			{
-				VkCommandPoolCreateInfo poolInfo = {};
-				poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-				poolInfo.queueFamilyIndex = copyFamily;
-				poolInfo.flags = 0; // Optional
-
-				res = vkCreateCommandPool(device, &poolInfo, nullptr, &frames[fr].copyCommandPool);
-				assert(res == VK_SUCCESS);
-
-				VkCommandBufferAllocateInfo commandBufferInfo = {};
-				commandBufferInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-				commandBufferInfo.commandBufferCount = 1;
-				commandBufferInfo.commandPool = frames[fr].copyCommandPool;
-				commandBufferInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-
-				res = vkAllocateCommandBuffers(device, &commandBufferInfo, &frames[fr].copyCommandBuffer);
-				assert(res == VK_SUCCESS);
-
-				VkCommandBufferBeginInfo beginInfo = {};
-				beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-				beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-				res = vkBeginCommandBuffer(frames[fr].copyCommandBuffer, &beginInfo);
-				assert(res == VK_SUCCESS);
-			}
 		}
-
-		// Create semaphores:
-		{
-			VkSemaphoreCreateInfo semaphoreInfo = {};
-			semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-
-			res = vkCreateSemaphore(device, &semaphoreInfo, nullptr, &copySemaphore);
-			assert(res == VK_SUCCESS);
-
-			for (uint32_t i = 0; i < BACKBUFFER_COUNT; i++)
-			{
-				res = vkCreateSemaphore(device, &semaphoreInfo, nullptr, &frames[i].swapchainAcquireSemaphore);
-				assert(res == VK_SUCCESS);
-				res = vkCreateSemaphore(device, &semaphoreInfo, nullptr, &frames[i].swapchainReleaseSemaphore);
-				assert(res == VK_SUCCESS);
-			}
-			
-		}
-
 
 		// Create default null descriptors:
 		{
@@ -2674,25 +2582,8 @@ using namespace Vulkan_Internal;
 			assert(res == VK_SUCCESS);
 
 			// Transitions:
-			copyQueueLock.lock();
+			transitionLocker.lock();
 			{
-				auto& frame = GetFrameResources();
-				if (!copyQueueUse)
-				{
-					copyQueueUse = true;
-
-					res = vkResetCommandPool(device, frame.copyCommandPool, 0);
-					assert(res == VK_SUCCESS);
-
-					VkCommandBufferBeginInfo beginInfo = {};
-					beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-					beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-					beginInfo.pInheritanceInfo = nullptr; // Optional
-
-					res = vkBeginCommandBuffer(frame.copyCommandBuffer, &beginInfo);
-					assert(res == VK_SUCCESS);
-				}
-
 				VkImageMemoryBarrier barrier = {};
 				barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
 				barrier.oldLayout = imageInfo.initialLayout;
@@ -2707,15 +2598,15 @@ using namespace Vulkan_Internal;
 				barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 				barrier.image = nullImage1D;
 				barrier.subresourceRange.layerCount = 1;
-				frame.loadedimagetransitions.push_back(barrier);
+				transitions.push_back(barrier);
 				barrier.image = nullImage2D;
 				barrier.subresourceRange.layerCount = 6;
-				frame.loadedimagetransitions.push_back(barrier);
+				transitions.push_back(barrier);
 				barrier.image = nullImage3D;
 				barrier.subresourceRange.layerCount = 1;
-				frame.loadedimagetransitions.push_back(barrier);
+				transitions.push_back(barrier);
 			}
-			copyQueueLock.unlock();
+			transitionLocker.unlock();
 
 			VkImageViewCreateInfo viewInfo = {};
 			viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -2772,10 +2663,7 @@ using namespace Vulkan_Internal;
 			assert(res == VK_SUCCESS);
 		}
 
-		// GPU Queries:
-		timestamp_frequency = uint64_t(1.0 / double(properties2.properties.limits.timestampPeriod) * 1000 * 1000 * 1000);
-		allocationhandler->queries_occlusion.init(allocationhandler.get(), VK_QUERY_TYPE_OCCLUSION);
-		allocationhandler->queries_timestamp.init(allocationhandler.get(), VK_QUERY_TYPE_TIMESTAMP);
+		TIMESTAMP_FREQUENCY = uint64_t(1.0 / double(properties2.properties.limits.timestampPeriod) * 1000 * 1000 * 1000);
 
 		// Dynamic PSO states:
 		pso_dynamicStates.push_back(VK_DYNAMIC_STATE_VIEWPORT);
@@ -2791,35 +2679,71 @@ using namespace Vulkan_Internal;
 		dynamicStateInfo.dynamicStateCount = (uint32_t)pso_dynamicStates.size();
 		dynamicStateInfo.pDynamicStates = pso_dynamicStates.data();
 
+		if (features_1_2.descriptorBindingUniformBufferUpdateAfterBind)
+		{
+			allocationhandler->bindlessUniformBuffers.init(device, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, properties_1_2.maxDescriptorSetUpdateAfterBindUniformBuffers / 4);
+		}
+		if (features_1_2.descriptorBindingSampledImageUpdateAfterBind)
+		{
+			allocationhandler->bindlessSampledImages.init(device, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, properties_1_2.maxDescriptorSetUpdateAfterBindSampledImages / 4);
+		}
+		if (features_1_2.descriptorBindingUniformTexelBufferUpdateAfterBind)
+		{
+			allocationhandler->bindlessUniformTexelBuffers.init(device, VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, properties_1_2.maxDescriptorSetUpdateAfterBindSampledImages / 4);
+		}
+		if (features_1_2.descriptorBindingStorageBufferUpdateAfterBind)
+		{
+			allocationhandler->bindlessStorageBuffers.init(device, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, properties_1_2.maxDescriptorSetUpdateAfterBindStorageBuffers / 4);
+		}
+		if (features_1_2.descriptorBindingStorageImageUpdateAfterBind)
+		{
+			allocationhandler->bindlessStorageImages.init(device, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, properties_1_2.maxDescriptorSetUpdateAfterBindStorageImages / 4);
+		}
+		if (features_1_2.descriptorBindingStorageTexelBufferUpdateAfterBind)
+		{
+			allocationhandler->bindlessStorageTexelBuffers.init(device, VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, properties_1_2.maxDescriptorSetUpdateAfterBindStorageImages / 4);
+		}
+		if (features_1_2.descriptorBindingSampledImageUpdateAfterBind)
+		{
+			allocationhandler->bindlessSamplers.init(device, VK_DESCRIPTOR_TYPE_SAMPLER, 256);
+		}
+		if (CheckCapability(GRAPHICSDEVICE_CAPABILITY_RAYTRACING_PIPELINE) || CheckCapability(GRAPHICSDEVICE_CAPABILITY_RAYTRACING_INLINE))
+		{
+			allocationhandler->bindlessAccelerationStructures.init(device, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 32);
+		}
+
+
 		wiBackLog::post("Created GraphicsDevice_Vulkan");
 	}
 	GraphicsDevice_Vulkan::~GraphicsDevice_Vulkan()
 	{
-		VkResult res = vkQueueWaitIdle(graphicsQueue);
+		VkResult res = vkDeviceWaitIdle(device);
 		assert(res == VK_SUCCESS);
-		res = vkQueueWaitIdle(presentQueue);
-		assert(res == VK_SUCCESS);
+
+		for (auto& queue : queues)
+		{
+			vkDestroySemaphore(device, queue.semaphore, nullptr);
+		}
 
 		for (auto& frame : frames)
 		{
-			vkDestroyFence(device, frame.frameFence, nullptr);
-			for (auto& commandPool : frame.commandPools)
+			for (int queue = 0; queue < QUEUE_COUNT; ++queue)
 			{
-				vkDestroyCommandPool(device, commandPool, nullptr);
+				vkDestroyFence(device, frame.fence[queue], nullptr);
+				for (int cmd = 0; cmd < COMMANDLIST_COUNT; ++cmd)
+				{
+					vkDestroyCommandPool(device, frame.commandPools[cmd][queue], nullptr);
+				}
 			}
 			vkDestroyCommandPool(device, frame.transitionCommandPool, nullptr);
-			vkDestroyCommandPool(device, frame.copyCommandPool, nullptr);
 
 			for (auto& descriptormanager : frame.descriptors)
 			{
 				descriptormanager.destroy();
 			}
-
-			vkDestroySemaphore(device, frame.swapchainAcquireSemaphore, nullptr);
-			vkDestroySemaphore(device, frame.swapchainReleaseSemaphore, nullptr);
 		}
 
-		vkDestroySemaphore(device, copySemaphore, nullptr);
+		copyAllocator.destroy();
 
 		for (auto& x : pso_layout_cache)
 		{
@@ -2853,29 +2777,92 @@ using namespace Vulkan_Internal;
 		vkDestroyImageView(device, nullImageView3D, nullptr);
 		vkDestroySampler(device, nullSampler, nullptr);
 
-		vkDestroyRenderPass(device, defaultRenderPass, nullptr);
-		for (size_t i = 0; i < swapChainImages.size(); ++i)
-		{
-			vkDestroyFramebuffer(device, swapChainFramebuffers[i], nullptr);
-			vkDestroyImageView(device, swapChainImageViews[i], nullptr);
-		}
-		vkDestroySwapchainKHR(device, swapChain, nullptr);
-
 		if (debugUtilsMessenger != VK_NULL_HANDLE)
 		{
 			vkDestroyDebugUtilsMessengerEXT(instance, debugUtilsMessenger, nullptr);
 		}
-
-		vkDestroySurfaceKHR(instance, surface, nullptr);
 	}
 
-	void GraphicsDevice_Vulkan::CreateBackBufferResources()
+	bool GraphicsDevice_Vulkan::CreateSwapChain(const SwapChainDesc* pDesc, wiPlatform::window_type window, SwapChain* swapChain) const
 	{
+		auto internal_state = std::static_pointer_cast<SwapChain_Vulkan>(swapChain->internal_state);
+		if (swapChain->internal_state == nullptr)
+		{
+			internal_state = std::make_shared<SwapChain_Vulkan>();
+		}
+		internal_state->allocationhandler = allocationhandler;
+		swapChain->internal_state = internal_state;
+		swapChain->desc = *pDesc;
+
+		VkResult res;
+
+		// Surface creation:
+		if(internal_state->surface == VK_NULL_HANDLE)
+		{
+#ifdef _WIN32
+			VkWin32SurfaceCreateInfoKHR createInfo = {};
+			createInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
+			createInfo.hwnd = window;
+			createInfo.hinstance = GetModuleHandle(nullptr);
+
+			VkResult res = vkCreateWin32SurfaceKHR(instance, &createInfo, nullptr, &internal_state->surface);
+			assert(res == VK_SUCCESS);
+#elif SDL2
+			if (!SDL_Vulkan_CreateSurface(window, instance, &internal_state->surface))
+			{
+				throw sdl2::SDLError("Error creating a vulkan surface");
+			}
+#else
+#error WICKEDENGINE VULKAN DEVICE ERROR: PLATFORM NOT SUPPORTED
+#endif // _WIN32
+		}
+
+		int presentFamily = -1;
+		int familyIndex = 0;
+		for (const auto& queueFamily : queueFamilies)
+		{
+			VkBool32 presentSupport = false;
+			res = vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice, (uint32_t)familyIndex, internal_state->surface, &presentSupport);
+			assert(res == VK_SUCCESS);
+
+			if (presentFamily < 0 && queueFamily.queueCount > 0 && presentSupport)
+			{
+				presentFamily = familyIndex;
+			}
+
+			familyIndex++;
+		}
+
+		res = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, internal_state->surface, &internal_state->swapchain_capabilities);
+		assert(res == VK_SUCCESS);
+
+		uint32_t formatCount;
+		res = vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, internal_state->surface, &formatCount, nullptr);
+		assert(res == VK_SUCCESS);
+
+		if (formatCount != 0)
+		{
+			internal_state->swapchain_formats.resize(formatCount);
+			res = vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, internal_state->surface, &formatCount, internal_state->swapchain_formats.data());
+			assert(res == VK_SUCCESS);
+		}
+
+		uint32_t presentModeCount;
+		res = vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, internal_state->surface, &presentModeCount, nullptr);
+		assert(res == VK_SUCCESS);
+
+		if (presentModeCount != 0)
+		{
+			internal_state->swapchain_presentModes.resize(presentModeCount);
+			res = vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, internal_state->surface, &presentModeCount, internal_state->swapchain_presentModes.data());
+			assert(res == VK_SUCCESS);
+		}
+
 		VkSurfaceFormatKHR surfaceFormat = {};
-		surfaceFormat.format = _ConvertFormat(BACKBUFFER_FORMAT);
+		surfaceFormat.format = _ConvertFormat(pDesc->format);
 		bool valid = false;
 
-		for (const auto& format : swapchain_formats)
+		for (const auto& format : internal_state->swapchain_formats)
 		{
 			if (format.format == surfaceFormat.format)
 			{
@@ -2887,49 +2874,33 @@ using namespace Vulkan_Internal;
 		if (!valid)
 		{
 			surfaceFormat = { VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR };
-			BACKBUFFER_FORMAT = FORMAT_B8G8R8A8_UNORM;
 		}
 
-		VkResult res = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, &swapchain_capabilities);
-		assert(res == VK_SUCCESS);
-
-		swapChainExtent = { static_cast<uint32_t>(RESOLUTIONWIDTH), static_cast<uint32_t>(RESOLUTIONHEIGHT) };
-		swapChainExtent.width = std::max(swapchain_capabilities.minImageExtent.width, std::min(swapchain_capabilities.maxImageExtent.width, swapChainExtent.width));
-		swapChainExtent.height = std::max(swapchain_capabilities.minImageExtent.height, std::min(swapchain_capabilities.maxImageExtent.height, swapChainExtent.height));
+		internal_state->swapChainExtent = { pDesc->width, pDesc->height };
+		internal_state->swapChainExtent.width = std::max(internal_state->swapchain_capabilities.minImageExtent.width, std::min(internal_state->swapchain_capabilities.maxImageExtent.width, internal_state->swapChainExtent.width));
+		internal_state->swapChainExtent.height = std::max(internal_state->swapchain_capabilities.minImageExtent.height, std::min(internal_state->swapchain_capabilities.maxImageExtent.height, internal_state->swapChainExtent.height));
 
 
-		uint32_t imageCount = BACKBUFFER_COUNT;
+		uint32_t imageCount = pDesc->buffercount;
 
 		VkSwapchainCreateInfoKHR createInfo = {};
 		createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-		createInfo.surface = surface;
+		createInfo.surface = internal_state->surface;
 		createInfo.minImageCount = imageCount;
 		createInfo.imageFormat = surfaceFormat.format;
 		createInfo.imageColorSpace = surfaceFormat.colorSpace;
-		createInfo.imageExtent = swapChainExtent;
+		createInfo.imageExtent = internal_state->swapChainExtent;
 		createInfo.imageArrayLayers = 1;
 		createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+		createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-		uint32_t queueFamilyIndices[] = { (uint32_t)graphicsFamily, (uint32_t)presentFamily };
-
-		if (graphicsFamily != presentFamily) {
-			createInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
-			createInfo.queueFamilyIndexCount = 2;
-			createInfo.pQueueFamilyIndices = queueFamilyIndices;
-		}
-		else {
-			createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-			createInfo.queueFamilyIndexCount = 0; // Optional
-			createInfo.pQueueFamilyIndices = nullptr; // Optional
-		}
-
-		createInfo.preTransform = swapchain_capabilities.currentTransform;
+		createInfo.preTransform = internal_state->swapchain_capabilities.currentTransform;
 		createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
 		createInfo.presentMode = VK_PRESENT_MODE_FIFO_KHR; // The only one that is always supported
-		if (!VSYNC)
+		if (!pDesc->vsync)
 		{
 			// The immediate present mode is not necessarily supported:
-			for (auto& presentmode : swapchain_presentModes)
+			for (auto& presentmode : internal_state->swapchain_presentModes)
 			{
 				if (presentmode == VK_PRESENT_MODE_IMMEDIATE_KHR)
 				{
@@ -2939,9 +2910,9 @@ using namespace Vulkan_Internal;
 			}
 		}
 		createInfo.clipped = VK_TRUE;
-		createInfo.oldSwapchain = swapChain;
+		createInfo.oldSwapchain = internal_state->swapChain;
 
-		res = vkCreateSwapchainKHR(device, &createInfo, nullptr, &swapChain);
+		res = vkCreateSwapchainKHR(device, &createInfo, nullptr, &internal_state->swapChain);
 		assert(res == VK_SUCCESS);
 
 		if (createInfo.oldSwapchain != VK_NULL_HANDLE)
@@ -2949,13 +2920,13 @@ using namespace Vulkan_Internal;
 			vkDestroySwapchainKHR(device, createInfo.oldSwapchain, nullptr);
 		}
 
-		res = vkGetSwapchainImagesKHR(device, swapChain, &imageCount, nullptr);
+		res = vkGetSwapchainImagesKHR(device, internal_state->swapChain, &imageCount, nullptr);
 		assert(res == VK_SUCCESS);
-		assert(BACKBUFFER_COUNT <= imageCount);
-		swapChainImages.resize(imageCount);
-		res = vkGetSwapchainImagesKHR(device, swapChain, &imageCount, swapChainImages.data());
+		assert(pDesc->buffercount <= imageCount);
+		internal_state->swapChainImages.resize(imageCount);
+		res = vkGetSwapchainImagesKHR(device, internal_state->swapChain, &imageCount, internal_state->swapChainImages.data());
 		assert(res == VK_SUCCESS);
-		swapChainImageFormat = surfaceFormat.format;
+		internal_state->swapChainImageFormat = surfaceFormat.format;
 
 		if (vkSetDebugUtilsObjectNameEXT != nullptr)
 		{
@@ -2963,7 +2934,7 @@ using namespace Vulkan_Internal;
 			info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
 			info.pObjectName = "SWAPCHAIN";
 			info.objectType = VK_OBJECT_TYPE_IMAGE;
-			for (auto& x : swapChainImages)
+			for (auto& x : internal_state->swapChainImages)
 			{
 				info.objectHandle = (uint64_t)x;
 
@@ -2975,7 +2946,7 @@ using namespace Vulkan_Internal;
 		// Create default render pass:
 		{
 			VkAttachmentDescription colorAttachment = {};
-			colorAttachment.format = swapChainImageFormat;
+			colorAttachment.format = internal_state->swapChainImageFormat;
 			colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
 			colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
 			colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -3011,25 +2982,34 @@ using namespace Vulkan_Internal;
 			renderPassInfo.dependencyCount = 1;
 			renderPassInfo.pDependencies = &dependency;
 
-			if (defaultRenderPass != VK_NULL_HANDLE)
 			{
-				allocationhandler->destroyer_renderpasses.push_back(std::make_pair(defaultRenderPass, allocationhandler->framecount));
+				auto renderpass_internal = to_internal(&internal_state->renderpass);
+				if (renderpass_internal != nullptr && renderpass_internal->renderpass != VK_NULL_HANDLE)
+				{
+					allocationhandler->destroyer_renderpasses.push_back(std::make_pair(renderpass_internal->renderpass, allocationhandler->framecount));
+				}
 			}
-			res = vkCreateRenderPass(device, &renderPassInfo, nullptr, &defaultRenderPass);
+
+			internal_state->renderpass = RenderPass();
+			wiHelper::hash_combine(internal_state->renderpass.hash, internal_state->swapChainImageFormat);
+			auto renderpass_internal = std::make_shared<RenderPass_Vulkan>();
+			internal_state->renderpass.internal_state = renderpass_internal;
+			internal_state->renderpass.desc.attachments.push_back(RenderPassAttachment::RenderTarget());
+			res = vkCreateRenderPass(device, &renderPassInfo, nullptr, &renderpass_internal->renderpass);
 			assert(res == VK_SUCCESS);
 
 		}
 
 		// Create swap chain render targets:
-		swapChainImageViews.resize(swapChainImages.size());
-		swapChainFramebuffers.resize(swapChainImages.size());
-		for (size_t i = 0; i < swapChainImages.size(); ++i)
+		internal_state->swapChainImageViews.resize(internal_state->swapChainImages.size());
+		internal_state->swapChainFramebuffers.resize(internal_state->swapChainImages.size());
+		for (size_t i = 0; i < internal_state->swapChainImages.size(); ++i)
 		{
 			VkImageViewCreateInfo createInfo = {};
 			createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-			createInfo.image = swapChainImages[i];
+			createInfo.image = internal_state->swapChainImages[i];
 			createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-			createInfo.format = swapChainImageFormat;
+			createInfo.format = internal_state->swapChainImageFormat;
 			createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
 			createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
 			createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
@@ -3040,62 +3020,53 @@ using namespace Vulkan_Internal;
 			createInfo.subresourceRange.baseArrayLayer = 0;
 			createInfo.subresourceRange.layerCount = 1;
 
-			if (swapChainImageViews[i] != VK_NULL_HANDLE)
+			if (internal_state->swapChainImageViews[i] != VK_NULL_HANDLE)
 			{
-				allocationhandler->destroyer_imageviews.push_back(std::make_pair(swapChainImageViews[i], allocationhandler->framecount));
+				allocationhandler->destroyer_imageviews.push_back(std::make_pair(internal_state->swapChainImageViews[i], allocationhandler->framecount));
 			}
-			res = vkCreateImageView(device, &createInfo, nullptr, &swapChainImageViews[i]);
+			res = vkCreateImageView(device, &createInfo, nullptr, &internal_state->swapChainImageViews[i]);
 			assert(res == VK_SUCCESS);
 
 			VkImageView attachments[] = {
-				swapChainImageViews[i]
+				internal_state->swapChainImageViews[i]
 			};
 
 			VkFramebufferCreateInfo framebufferInfo = {};
 			framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-			framebufferInfo.renderPass = defaultRenderPass;
+			framebufferInfo.renderPass = to_internal(&internal_state->renderpass)->renderpass;
 			framebufferInfo.attachmentCount = 1;
 			framebufferInfo.pAttachments = attachments;
-			framebufferInfo.width = swapChainExtent.width;
-			framebufferInfo.height = swapChainExtent.height;
+			framebufferInfo.width = internal_state->swapChainExtent.width;
+			framebufferInfo.height = internal_state->swapChainExtent.height;
 			framebufferInfo.layers = 1;
 
-			if (swapChainFramebuffers[i] != VK_NULL_HANDLE)
+			if (internal_state->swapChainFramebuffers[i] != VK_NULL_HANDLE)
 			{
-				allocationhandler->destroyer_framebuffers.push_back(std::make_pair(swapChainFramebuffers[i], allocationhandler->framecount));
+				allocationhandler->destroyer_framebuffers.push_back(std::make_pair(internal_state->swapChainFramebuffers[i], allocationhandler->framecount));
 			}
-			res = vkCreateFramebuffer(device, &framebufferInfo, nullptr, &swapChainFramebuffers[i]);
+			res = vkCreateFramebuffer(device, &framebufferInfo, nullptr, &internal_state->swapChainFramebuffers[i]);
 			assert(res == VK_SUCCESS);
 		}
-	}
 
-	void GraphicsDevice_Vulkan::SetResolution(int width, int height)
-	{
-		if (width != RESOLUTIONWIDTH || height != RESOLUTIONHEIGHT)
+
+		VkSemaphoreCreateInfo semaphoreInfo = {};
+		semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+		if (internal_state->swapchainAcquireSemaphore == nullptr)
 		{
-			RESOLUTIONWIDTH = width;
-			RESOLUTIONHEIGHT = height;
-
-			CreateBackBufferResources();
+			res = vkCreateSemaphore(device, &semaphoreInfo, nullptr, &internal_state->swapchainAcquireSemaphore);
+			assert(res == VK_SUCCESS);
 		}
+
+		if (internal_state->swapchainReleaseSemaphore == nullptr)
+		{
+			res = vkCreateSemaphore(device, &semaphoreInfo, nullptr, &internal_state->swapchainReleaseSemaphore);
+			assert(res == VK_SUCCESS);
+		}
+
+		return true;
 	}
-
-	Texture GraphicsDevice_Vulkan::GetBackBuffer()
-	{
-		auto internal_state = std::make_shared<Texture_Vulkan>();
-		internal_state->resource = swapChainImages[swapChainImageIndex];
-
-		Texture result;
-		result.type = GPUResource::GPU_RESOURCE_TYPE::TEXTURE;
-		result.internal_state = internal_state;
-		result.desc.type = TextureDesc::TEXTURE_2D;
-		result.desc.Width = swapChainExtent.width;
-		result.desc.Height = swapChainExtent.height;
-		result.desc.Format = BACKBUFFER_FORMAT;
-		return result;
-	}
-
-	bool GraphicsDevice_Vulkan::CreateBuffer(const GPUBufferDesc *pDesc, const SubresourceData* pInitialData, GPUBuffer *pBuffer)
+	bool GraphicsDevice_Vulkan::CreateBuffer(const GPUBufferDesc *pDesc, const SubresourceData* pInitialData, GPUBuffer *pBuffer) const
 	{
 		auto internal_state = std::make_shared<Buffer_Vulkan>();
 		internal_state->allocationhandler = allocationhandler;
@@ -3165,7 +3136,16 @@ using namespace Vulkan_Internal;
 
 		bufferInfo.flags = 0;
 
-		bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		if (families.size() > 1)
+		{
+			bufferInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
+			bufferInfo.queueFamilyIndexCount = (uint32_t)families.size();
+			bufferInfo.pQueueFamilyIndices = families.data();
+		}
+		else
+		{
+			bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		}
 
 
 
@@ -3173,7 +3153,7 @@ using namespace Vulkan_Internal;
 
 		VmaAllocationCreateInfo allocInfo = {};
 		//allocInfo.flags = VMA_ALLOCATION_CREATE_STRATEGY_MIN_MEMORY_BIT;
-		allocInfo.flags = VMA_ALLOCATION_CREATE_STRATEGY_MIN_FRAGMENTATION_BIT;
+		//allocInfo.flags = VMA_ALLOCATION_CREATE_STRATEGY_MIN_FRAGMENTATION_BIT;
 		allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
 		if (pDesc->Usage == USAGE_STAGING)
 		{
@@ -3208,38 +3188,12 @@ using namespace Vulkan_Internal;
 		// Issue data copy on request:
 		if (pInitialData != nullptr)
 		{
-			GPUBufferDesc uploaddesc;
-			uploaddesc.ByteWidth = pDesc->ByteWidth;
-			uploaddesc.Usage = USAGE_STAGING;
-			GPUBuffer uploadbuffer;
-			bool upload_success = CreateBuffer(&uploaddesc, nullptr, &uploadbuffer);
-			assert(upload_success);
-			VkBuffer upload_resource = to_internal(&uploadbuffer)->resource;
-			VmaAllocation upload_allocation = to_internal(&uploadbuffer)->allocation;
+			auto cmd = copyAllocator.allocate(pDesc->ByteWidth);
 
-			void* pData = upload_allocation->GetMappedData();
-			assert(pData != nullptr);
+			memcpy(cmd.data, pInitialData->pSysMem, pBuffer->desc.ByteWidth);
 
-			memcpy(pData, pInitialData->pSysMem, pBuffer->desc.ByteWidth);
-
-			copyQueueLock.lock();
 			{
 				auto& frame = GetFrameResources();
-				if (!copyQueueUse)
-				{
-					copyQueueUse = true;
-
-					res = vkResetCommandPool(device, frame.copyCommandPool, 0);
-					assert(res == VK_SUCCESS);
-
-					VkCommandBufferBeginInfo beginInfo = {};
-					beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-					beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-					beginInfo.pInheritanceInfo = nullptr; // Optional
-
-					res = vkBeginCommandBuffer(frame.copyCommandBuffer, &beginInfo);
-					assert(res == VK_SUCCESS);
-				}
 
 				VkBufferMemoryBarrier barrier = {};
 				barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
@@ -3252,7 +3206,7 @@ using namespace Vulkan_Internal;
 				barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 
 				vkCmdPipelineBarrier(
-					frame.copyCommandBuffer,
+					cmd.commandBuffer,
 					VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
 					VK_PIPELINE_STAGE_TRANSFER_BIT,
 					0,
@@ -3267,8 +3221,8 @@ using namespace Vulkan_Internal;
 				copyRegion.dstOffset = 0;
 
 				vkCmdCopyBuffer(
-					frame.copyCommandBuffer,
-					upload_resource,
+					cmd.commandBuffer,
+					cmd.upload_resource,
 					internal_state->resource,
 					1,
 					&copyRegion
@@ -3299,12 +3253,8 @@ using namespace Vulkan_Internal;
 					barrier.dstAccessMask |= VK_ACCESS_SHADER_WRITE_BIT;
 				}
 
-				// transfer queue-ownership from copy to graphics:
-				barrier.srcQueueFamilyIndex = copyFamily;
-				barrier.dstQueueFamilyIndex = graphicsFamily;
-
 				vkCmdPipelineBarrier(
-					frame.copyCommandBuffer,
+					cmd.commandBuffer,
 					VK_PIPELINE_STAGE_TRANSFER_BIT,
 					VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
 					0,
@@ -3312,12 +3262,26 @@ using namespace Vulkan_Internal;
 					1, &barrier,
 					0, nullptr
 				);
+
+				copyAllocator.submit(cmd);
 			}
-			copyQueueLock.unlock();
+		}
+
+		if (pDesc->Format == FORMAT_UNKNOWN)
+		{
+			internal_state->is_typedbuffer = false;
+		}
+		else
+		{
+			internal_state->is_typedbuffer = true;
 		}
 
 
 		// Create resource views if needed
+		if (pDesc->BindFlags & BIND_CONSTANT_BUFFER)
+		{
+			CreateSubresource(pBuffer, CBV, 0);
+		}
 		if (pDesc->BindFlags & BIND_SHADER_RESOURCE)
 		{
 			CreateSubresource(pBuffer, SRV, 0);
@@ -3331,7 +3295,7 @@ using namespace Vulkan_Internal;
 
 		return res == VK_SUCCESS;
 	}
-	bool GraphicsDevice_Vulkan::CreateTexture(const TextureDesc* pDesc, const SubresourceData *pInitialData, Texture *pTexture)
+	bool GraphicsDevice_Vulkan::CreateTexture(const TextureDesc* pDesc, const SubresourceData *pInitialData, Texture *pTexture) const
 	{
 		auto internal_state = std::make_shared<Texture_Vulkan>();
 		internal_state->allocationhandler = allocationhandler;
@@ -3347,7 +3311,7 @@ using namespace Vulkan_Internal;
 
 		VmaAllocationCreateInfo allocInfo = {};
 		//allocInfo.flags = VMA_ALLOCATION_CREATE_STRATEGY_MIN_MEMORY_BIT;
-		allocInfo.flags = VMA_ALLOCATION_CREATE_STRATEGY_MIN_FRAGMENTATION_BIT;
+		//allocInfo.flags = VMA_ALLOCATION_CREATE_STRATEGY_MIN_FRAGMENTATION_BIT;
 		allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
 
 		VkImageCreateInfo imageInfo = {};
@@ -3389,7 +3353,16 @@ using namespace Vulkan_Internal;
 			imageInfo.flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
 		}
 
-		imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		if (families.size() > 1)
+		{
+			imageInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
+			imageInfo.queueFamilyIndexCount = (uint32_t)families.size();
+			imageInfo.pQueueFamilyIndices = families.data();
+		}
+		else
+		{
+			imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		}
 
 		switch (pTexture->desc.type)
 		{
@@ -3453,17 +3426,7 @@ using namespace Vulkan_Internal;
 		// Issue data copy on request:
 		if (pInitialData != nullptr)
 		{
-			GPUBufferDesc uploaddesc;
-			uploaddesc.ByteWidth = (uint32_t)internal_state->allocation->GetSize();
-			uploaddesc.Usage = USAGE_STAGING;
-			GPUBuffer uploadbuffer;
-			bool upload_success = CreateBuffer(&uploaddesc, nullptr, &uploadbuffer);
-			assert(upload_success);
-			VkBuffer upload_resource = to_internal(&uploadbuffer)->resource;
-			VmaAllocation upload_allocation = to_internal(&uploadbuffer)->allocation;
-
-			void* pData = upload_allocation->GetMappedData();
-			assert(pData != nullptr);
+			auto cmd = copyAllocator.allocate((uint32_t)internal_state->allocation->GetSize());
 
 			std::vector<VkBufferImageCopy> copyRegions;
 
@@ -3472,15 +3435,16 @@ using namespace Vulkan_Internal;
 			uint32_t width = imageInfo.extent.width;
 			uint32_t height = imageInfo.extent.height;
 			uint32_t depth = imageInfo.extent.depth;
+			uint32_t layers = pDesc->ArraySize;
 			for (uint32_t mip = 0; mip < pDesc->MipLevels; ++mip)
 			{
 				const SubresourceData& subresourceData = pInitialData[initDataIdx++];
-				size_t cpysize = subresourceData.SysMemPitch * height * depth;
+				size_t cpysize = subresourceData.SysMemPitch * height * depth * layers;
 				if (IsFormatBlockCompressed(pDesc->Format))
 				{
 					cpysize /= 4;
 				}
-				uint8_t* cpyaddr = (uint8_t*)pData + cpyoffset;
+				uint8_t* cpyaddr = (uint8_t*)cmd.data + cpyoffset;
 				memcpy(cpyaddr, subresourceData.pSysMem, cpysize);
 
 				VkBufferImageCopy copyRegion = {};
@@ -3491,7 +3455,7 @@ using namespace Vulkan_Internal;
 				copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
 				copyRegion.imageSubresource.mipLevel = mip;
 				copyRegion.imageSubresource.baseArrayLayer = 0;
-				copyRegion.imageSubresource.layerCount = 1;
+				copyRegion.imageSubresource.layerCount = layers;
 
 				copyRegion.imageOffset = { 0, 0, 0 };
 				copyRegion.imageExtent = {
@@ -3509,25 +3473,7 @@ using namespace Vulkan_Internal;
 				cpyoffset += Align(cpysize, GetFormatStride(pDesc->Format));
 			}
 
-			copyQueueLock.lock();
 			{
-				auto& frame = GetFrameResources();
-				if (!copyQueueUse)
-				{
-					copyQueueUse = true;
-
-					res = vkResetCommandPool(device, frame.copyCommandPool, 0);
-					assert(res == VK_SUCCESS);
-
-					VkCommandBufferBeginInfo beginInfo = {};
-					beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-					beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-					beginInfo.pInheritanceInfo = nullptr; // Optional
-
-					res = vkBeginCommandBuffer(frame.copyCommandBuffer, &beginInfo);
-					assert(res == VK_SUCCESS);
-				}
-
 				VkImageMemoryBarrier barrier = {};
 				barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
 				barrier.image = internal_state->resource;
@@ -3544,7 +3490,7 @@ using namespace Vulkan_Internal;
 				barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 
 				vkCmdPipelineBarrier(
-					frame.copyCommandBuffer,
+					cmd.commandBuffer,
 					VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
 					VK_PIPELINE_STAGE_TRANSFER_BIT,
 					0,
@@ -3553,30 +3499,29 @@ using namespace Vulkan_Internal;
 					1, &barrier
 				);
 
-				vkCmdCopyBufferToImage(frame.copyCommandBuffer, upload_resource, internal_state->resource, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, (uint32_t)copyRegions.size(), copyRegions.data());
+				vkCmdCopyBufferToImage(cmd.commandBuffer, cmd.upload_resource, internal_state->resource, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, (uint32_t)copyRegions.size(), copyRegions.data());
+
+				copyAllocator.submit(cmd);
 
 				barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 				barrier.newLayout = _ConvertImageLayout(pTexture->desc.layout);
 				barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-				barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+				barrier.dstAccessMask = _ParseImageLayout(pTexture->desc.layout);
 
-				frame.loadedimagetransitions.push_back(barrier);
-
+				transitionLocker.lock();
+				transitions.push_back(barrier);
+				transitionLocker.unlock();
 			}
-			copyQueueLock.unlock();
 		}
 		else
 		{
-			copyQueueLock.lock();
-
-
 			VkImageMemoryBarrier barrier = {};
 			barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
 			barrier.image = internal_state->resource;
 			barrier.oldLayout = imageInfo.initialLayout;
 			barrier.newLayout = _ConvertImageLayout(pTexture->desc.layout);
 			barrier.srcAccessMask = 0;
-			barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+			barrier.dstAccessMask = _ParseImageLayout(pTexture->desc.layout);
 			if (pTexture->desc.BindFlags & BIND_DEPTH_STENCIL)
 			{
 				barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
@@ -3596,10 +3541,9 @@ using namespace Vulkan_Internal;
 			barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 			barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 
-			auto& frame = GetFrameResources();
-			frame.loadedimagetransitions.push_back(barrier);
-
-			copyQueueLock.unlock();
+			transitionLocker.lock();
+			transitions.push_back(barrier);
+			transitionLocker.unlock();
 		}
 
 		if (pTexture->desc.BindFlags & BIND_RENDER_TARGET)
@@ -3621,7 +3565,7 @@ using namespace Vulkan_Internal;
 
 		return res == VK_SUCCESS;
 	}
-	bool GraphicsDevice_Vulkan::CreateShader(SHADERSTAGE stage, const void *pShaderBytecode, size_t BytecodeLength, Shader *pShader)
+	bool GraphicsDevice_Vulkan::CreateShader(SHADERSTAGE stage, const void *pShaderBytecode, size_t BytecodeLength, Shader *pShader) const
 	{
 		auto internal_state = std::make_shared<Shader_Vulkan>();
 		internal_state->allocationhandler = allocationhandler;
@@ -3668,43 +3612,69 @@ using namespace Vulkan_Internal;
 			internal_state->stageInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
 			break;
 		default:
+			// also means library shader (ray tracing)
 			internal_state->stageInfo.stage = VK_SHADER_STAGE_ALL;
-			// library shader (ray tracing)
 			break;
 		}
 
-		if (pShader->rootSignature == nullptr)
 		{
-			// Perform shader reflection for shaders that don't specify a root signature:
-
 			SpvReflectShaderModule module;
 			SpvReflectResult result = spvReflectCreateShaderModule(moduleInfo.codeSize, moduleInfo.pCode, &module);
 			assert(result == SPV_REFLECT_RESULT_SUCCESS);
 
 			uint32_t binding_count = 0;
-			result = spvReflectEnumerateEntryPointDescriptorBindings(
-				&module, internal_state->stageInfo.pName, &binding_count, nullptr
+			result = spvReflectEnumerateDescriptorBindings(
+				&module, &binding_count, nullptr
 			);
 			assert(result == SPV_REFLECT_RESULT_SUCCESS);
 
 			std::vector<SpvReflectDescriptorBinding*> bindings(binding_count);
-			result = spvReflectEnumerateEntryPointDescriptorBindings(
-				&module, internal_state->stageInfo.pName, &binding_count, bindings.data()
+			result = spvReflectEnumerateDescriptorBindings(
+				&module, &binding_count, bindings.data()
 			);
 			assert(result == SPV_REFLECT_RESULT_SUCCESS);
 
-			std::vector<VkDescriptorSetLayoutBinding>& layoutBindings = internal_state->layoutBindings;
-			std::vector<VkImageViewType>& imageViewTypes = internal_state->imageViewTypes;
+			uint32_t push_count = 0;
+			result = spvReflectEnumeratePushConstantBlocks(&module, &push_count, nullptr);
+			assert(result == SPV_REFLECT_RESULT_SUCCESS);
+
+			std::vector<SpvReflectBlockVariable*> pushconstants(push_count);
+			result = spvReflectEnumeratePushConstantBlocks(&module, &push_count, pushconstants.data());
+			assert(result == SPV_REFLECT_RESULT_SUCCESS);
 
 			std::vector<VkSampler> staticsamplers;
 
+			for (auto& x : pushconstants)
+			{
+				auto& push = internal_state->pushconstants;
+				push.stageFlags = internal_state->stageInfo.stage;
+				push.offset = x->offset;
+				push.size = x->size;
+			}
+
 			for (auto& x : bindings)
 			{
-				imageViewTypes.push_back(VK_IMAGE_VIEW_TYPE_MAX_ENUM);
-				layoutBindings.emplace_back();
-				layoutBindings.back().stageFlags = internal_state->stageInfo.stage;
-				layoutBindings.back().binding = x->binding;
-				layoutBindings.back().descriptorCount = 1;
+				const bool bindless = x->set > 0;
+
+				if (bindless)
+				{
+					// There can be padding between bindless spaces because sets need to be bound contiguously
+					internal_state->bindlessBindings.resize(std::max(internal_state->bindlessBindings.size(), (size_t)x->set));
+				}
+
+				auto& descriptor = bindless ? internal_state->bindlessBindings[x->set - 1] : internal_state->layoutBindings.emplace_back();
+				descriptor.stageFlags = internal_state->stageInfo.stage;
+				descriptor.binding = x->binding;
+				descriptor.descriptorCount = x->count;
+				descriptor.descriptorType = (VkDescriptorType)x->descriptor_type;
+
+				if (bindless)
+				{
+					continue;
+				}
+
+				auto& imageViewType = internal_state->imageViewTypes.emplace_back();
+				imageViewType = VK_IMAGE_VIEW_TYPE_MAX_ENUM;
 
 				if (x->descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLER)
 				{
@@ -3713,7 +3683,7 @@ using namespace Vulkan_Internal;
 					{
 						if (x->binding == sam.slot + VULKAN_BINDING_SHIFT_S)
 						{
-							layoutBindings.back().pImmutableSamplers = &to_internal(&sam.sampler)->resource;
+							descriptor.pImmutableSamplers = &to_internal(&sam.sampler)->resource;
 							staticsampler = true;
 							break; // static sampler will be used instead
 						}
@@ -3724,7 +3694,7 @@ using namespace Vulkan_Internal;
 						{
 							if (x->binding == sam.slot + VULKAN_BINDING_SHIFT_S)
 							{
-								layoutBindings.back().pImmutableSamplers = &to_internal(&sam.sampler)->resource;
+								descriptor.pImmutableSamplers = &to_internal(&sam.sampler)->resource;
 								staticsampler = true;
 								break; // static sampler will be used instead
 							}
@@ -3739,72 +3709,46 @@ using namespace Vulkan_Internal;
 				switch (x->descriptor_type)
 				{
 				default:
-				case SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLER:
-				case SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
-					layoutBindings.back().descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
 					break;
 				case SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
 				case SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_IMAGE:
-					if (x->descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLED_IMAGE)
-					{
-						layoutBindings.back().descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-					}
-					else
-					{
-						layoutBindings.back().descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-					}
 					switch (x->image.dim)
 					{
 					default:
 					case SpvDim1D:
 						if (x->image.arrayed == 0)
 						{
-							imageViewTypes.back() = VK_IMAGE_VIEW_TYPE_1D;
+							imageViewType = VK_IMAGE_VIEW_TYPE_1D;
 						}
 						else
 						{
-							imageViewTypes.back() = VK_IMAGE_VIEW_TYPE_1D_ARRAY;
+							imageViewType = VK_IMAGE_VIEW_TYPE_1D_ARRAY;
 						}
 						break;
 					case SpvDim2D:
 						if (x->image.arrayed == 0)
 						{
-							imageViewTypes.back() = VK_IMAGE_VIEW_TYPE_2D;
+							imageViewType = VK_IMAGE_VIEW_TYPE_2D;
 						}
 						else
 						{
-							imageViewTypes.back() = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+							imageViewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
 						}
 						break;
 					case SpvDim3D:
-						imageViewTypes.back() = VK_IMAGE_VIEW_TYPE_3D;
+						imageViewType = VK_IMAGE_VIEW_TYPE_3D;
 						break;
 					case SpvDimCube:
 						if (x->image.arrayed == 0)
 						{
-							imageViewTypes.back() = VK_IMAGE_VIEW_TYPE_CUBE;
+							imageViewType = VK_IMAGE_VIEW_TYPE_CUBE;
 						}
 						else
 						{
-							imageViewTypes.back() = VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
+							imageViewType = VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
 						}
 						break;
 					}
-					break;
-				case SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
-					layoutBindings.back().descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-					break;
-				case SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER:
-					layoutBindings.back().descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-					break;
-				case SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
-					layoutBindings.back().descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
-					break;
-				case SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
-					layoutBindings.back().descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
-					break;
-				case SPV_REFLECT_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
-					layoutBindings.back().descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
 					break;
 				}
 			}
@@ -3823,23 +3767,86 @@ using namespace Vulkan_Internal;
 					wiHelper::hash_combine(internal_state->binding_hash, x.stageFlags);
 					wiHelper::hash_combine(internal_state->binding_hash, internal_state->imageViewTypes[i++]);
 				}
+				for (auto& x : internal_state->bindlessBindings)
+				{
+					wiHelper::hash_combine(internal_state->binding_hash, x.binding);
+					wiHelper::hash_combine(internal_state->binding_hash, x.descriptorCount);
+					wiHelper::hash_combine(internal_state->binding_hash, x.descriptorType);
+					wiHelper::hash_combine(internal_state->binding_hash, x.stageFlags);
+				}
 
 				pso_layout_cache_mutex.lock();
 				if (pso_layout_cache[internal_state->binding_hash].pipelineLayout == VK_NULL_HANDLE)
 				{
-					VkDescriptorSetLayoutCreateInfo descriptorSetlayoutInfo = {};
-					descriptorSetlayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-					descriptorSetlayoutInfo.pBindings = layoutBindings.data();
-					descriptorSetlayoutInfo.bindingCount = static_cast<uint32_t>(layoutBindings.size());
-					res = vkCreateDescriptorSetLayout(device, &descriptorSetlayoutInfo, nullptr, &internal_state->descriptorSetLayout);
-					assert(res == VK_SUCCESS);
-					pso_layout_cache[internal_state->binding_hash].descriptorSetLayout = internal_state->descriptorSetLayout;
+					std::vector<VkDescriptorSetLayout> layouts;
+
+					{
+						VkDescriptorSetLayoutCreateInfo descriptorSetlayoutInfo = {};
+						descriptorSetlayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+						descriptorSetlayoutInfo.pBindings = internal_state->layoutBindings.data();
+						descriptorSetlayoutInfo.bindingCount = uint32_t(internal_state->layoutBindings.size());
+						res = vkCreateDescriptorSetLayout(device, &descriptorSetlayoutInfo, nullptr, &internal_state->descriptorSetLayout);
+						assert(res == VK_SUCCESS);
+						pso_layout_cache[internal_state->binding_hash].descriptorSetLayout = internal_state->descriptorSetLayout;
+						layouts.push_back(internal_state->descriptorSetLayout);
+					}
+
+					internal_state->bindlessFirstSet = (uint32_t)layouts.size();
+					for (auto& x : internal_state->bindlessBindings)
+					{
+						switch (x.descriptorType)
+						{
+						case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+							layouts.push_back(allocationhandler->bindlessUniformBuffers.descriptorSetLayout);
+							internal_state->bindlessSets.push_back(allocationhandler->bindlessUniformBuffers.descriptorSet);
+							break;
+						case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+							layouts.push_back(allocationhandler->bindlessSampledImages.descriptorSetLayout);
+							internal_state->bindlessSets.push_back(allocationhandler->bindlessSampledImages.descriptorSet);
+							break;
+						case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+							layouts.push_back(allocationhandler->bindlessUniformTexelBuffers.descriptorSetLayout);
+							internal_state->bindlessSets.push_back(allocationhandler->bindlessUniformTexelBuffers.descriptorSet);
+							break;
+						case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+							layouts.push_back(allocationhandler->bindlessStorageBuffers.descriptorSetLayout);
+							internal_state->bindlessSets.push_back(allocationhandler->bindlessStorageBuffers.descriptorSet);
+							break;
+						case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+							layouts.push_back(allocationhandler->bindlessStorageImages.descriptorSetLayout);
+							internal_state->bindlessSets.push_back(allocationhandler->bindlessStorageImages.descriptorSet);
+							break;
+						case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+							layouts.push_back(allocationhandler->bindlessStorageTexelBuffers.descriptorSetLayout);
+							internal_state->bindlessSets.push_back(allocationhandler->bindlessStorageTexelBuffers.descriptorSet);
+							break;
+						case VK_DESCRIPTOR_TYPE_SAMPLER:
+							layouts.push_back(allocationhandler->bindlessSamplers.descriptorSetLayout);
+							internal_state->bindlessSets.push_back(allocationhandler->bindlessSamplers.descriptorSet);
+							break;
+						case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
+							layouts.push_back(allocationhandler->bindlessAccelerationStructures.descriptorSetLayout);
+							internal_state->bindlessSets.push_back(allocationhandler->bindlessAccelerationStructures.descriptorSet);
+							break;
+						default:
+							break;
+						}
+					}
 
 					VkPipelineLayoutCreateInfo pipelineLayoutInfo = {};
 					pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-					pipelineLayoutInfo.pSetLayouts = &internal_state->descriptorSetLayout;
-					pipelineLayoutInfo.setLayoutCount = 1; // cs
-					pipelineLayoutInfo.pushConstantRangeCount = 0;
+					pipelineLayoutInfo.pSetLayouts = layouts.data();
+					pipelineLayoutInfo.setLayoutCount = (uint32_t)layouts.size();
+					if (internal_state->pushconstants.size > 0)
+					{
+						pipelineLayoutInfo.pushConstantRangeCount = 1;
+						pipelineLayoutInfo.pPushConstantRanges = &internal_state->pushconstants;
+					}
+					else
+					{
+						pipelineLayoutInfo.pushConstantRangeCount = 0;
+						pipelineLayoutInfo.pPushConstantRanges = nullptr;
+					}
 
 					res = vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &internal_state->pipelineLayout_cs);
 					assert(res == VK_SUCCESS);
@@ -3858,16 +3865,7 @@ using namespace Vulkan_Internal;
 		{
 			VkComputePipelineCreateInfo pipelineInfo = {};
 			pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-			if (pShader->rootSignature == nullptr)
-			{
-				// pipeline layout from reflection:
-				pipelineInfo.layout = internal_state->pipelineLayout_cs;
-			}
-			else
-			{
-				// pipeline layout from root signature:
-				pipelineInfo.layout = to_internal(pShader->rootSignature)->pipelineLayout;
-			}
+			pipelineInfo.layout = internal_state->pipelineLayout_cs;
 			pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
 
 			// Create compute pipeline state in place:
@@ -3880,7 +3878,7 @@ using namespace Vulkan_Internal;
 
 		return res == VK_SUCCESS;
 	}
-	bool GraphicsDevice_Vulkan::CreateSampler(const SamplerDesc *pSamplerDesc, Sampler *pSamplerState)
+	bool GraphicsDevice_Vulkan::CreateSampler(const SamplerDesc *pSamplerDesc, Sampler *pSamplerState) const
 	{
 		auto internal_state = std::make_shared<Sampler_Vulkan>();
 		internal_state->allocationhandler = allocationhandler;
@@ -4063,33 +4061,58 @@ using namespace Vulkan_Internal;
 		VkResult res = vkCreateSampler(device, &createInfo, nullptr, &internal_state->resource);
 		assert(res == VK_SUCCESS);
 
+		internal_state->index = allocationhandler->bindlessSamplers.allocate();
+		if (internal_state->index >= 0)
+		{
+			VkDescriptorImageInfo imageInfo = {};
+			imageInfo.sampler = internal_state->resource;
+			VkWriteDescriptorSet write = {};
+			write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+			write.dstBinding = 0;
+			write.dstArrayElement = internal_state->index;
+			write.descriptorCount = 1;
+			write.dstSet = allocationhandler->bindlessSamplers.descriptorSet;
+			write.pImageInfo = &imageInfo;
+			vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+		}
+		else
+		{
+			assert(0);
+		}
+
 		return res == VK_SUCCESS;
 	}
-	bool GraphicsDevice_Vulkan::CreateQuery(const GPUQueryDesc *pDesc, GPUQuery *pQuery)
+	bool GraphicsDevice_Vulkan::CreateQueryHeap(const GPUQueryHeapDesc* pDesc, GPUQueryHeap* pQueryHeap) const
 	{
-		auto internal_state = std::make_shared<Query_Vulkan>();
+		auto internal_state = std::make_shared<QueryHeap_Vulkan>();
 		internal_state->allocationhandler = allocationhandler;
-		pQuery->internal_state = internal_state;
+		pQueryHeap->internal_state = internal_state;
 
-		pQuery->desc = *pDesc;
-		internal_state->query_type = pQuery->desc.Type;
+		pQueryHeap->desc = *pDesc;
 
-		switch (pDesc->Type)
+		VkQueryPoolCreateInfo poolInfo = {};
+		poolInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+		poolInfo.queryCount = pDesc->queryCount;
+
+		switch (pDesc->type)
 		{
 		case GPU_QUERY_TYPE_TIMESTAMP:
-			internal_state->query = allocationhandler->queries_timestamp.allocate();
-			break;
-		case GPU_QUERY_TYPE_TIMESTAMP_DISJOINT:
+			poolInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
 			break;
 		case GPU_QUERY_TYPE_OCCLUSION:
-		case GPU_QUERY_TYPE_OCCLUSION_PREDICATE:
-			internal_state->query = allocationhandler->queries_occlusion.allocate();
+		case GPU_QUERY_TYPE_OCCLUSION_BINARY:
+			poolInfo.queryType = VK_QUERY_TYPE_OCCLUSION;
 			break;
 		}
 
-		return true;
+		VkResult res = vkCreateQueryPool(device, &poolInfo, nullptr, &internal_state->pool);
+		assert(res == VK_SUCCESS);
+		vkResetQueryPool(device, internal_state->pool, 0, poolInfo.queryCount);
+
+		return res == VK_SUCCESS;
 	}
-	bool GraphicsDevice_Vulkan::CreatePipelineState(const PipelineStateDesc* pDesc, PipelineState* pso)
+	bool GraphicsDevice_Vulkan::CreatePipelineState(const PipelineStateDesc* pDesc, PipelineState* pso) const
 	{
 		auto internal_state = std::make_shared<PipelineState_Vulkan>();
 		internal_state->allocationhandler = allocationhandler;
@@ -4112,7 +4135,8 @@ using namespace Vulkan_Internal;
 		wiHelper::hash_combine(pso->hash, pDesc->pt);
 		wiHelper::hash_combine(pso->hash, pDesc->sampleMask);
 
-		if (pDesc->rootSignature == nullptr)
+		VkResult res = VK_SUCCESS;
+
 		{
 			// Descriptor set layout comes from reflection data when there is no root signature specified:
 
@@ -4151,6 +4175,13 @@ using namespace Vulkan_Internal;
 					}
 					i++;
 				}
+
+				if (shader_internal->pushconstants.size > 0)
+				{
+					internal_state->pushconstants.offset = shader_internal->pushconstants.offset;
+					internal_state->pushconstants.size = shader_internal->pushconstants.size;
+					internal_state->pushconstants.stageFlags |= shader_internal->pushconstants.stageFlags;
+				}
 			};
 
 			insert_shader(pDesc->ms);
@@ -4160,6 +4191,36 @@ using namespace Vulkan_Internal;
 			insert_shader(pDesc->ds);
 			insert_shader(pDesc->gs);
 			insert_shader(pDesc->ps);
+
+			auto insert_shader_bindless = [&](const Shader* shader) {
+				if (shader == nullptr)
+					return;
+				auto shader_internal = to_internal(shader);
+
+				internal_state->bindlessBindings.resize(std::max(internal_state->bindlessBindings.size(), shader_internal->bindlessBindings.size()));
+
+				int i = 0;
+				for (auto& x : shader_internal->bindlessBindings)
+				{
+					if (internal_state->bindlessBindings[i].descriptorType != x.descriptorType)
+					{
+						internal_state->bindlessBindings[i] = x;
+					}
+					else
+					{
+						internal_state->bindlessBindings[i].stageFlags |= x.stageFlags;
+					}
+					i++;
+				}
+			};
+
+			insert_shader_bindless(pDesc->ms);
+			insert_shader_bindless(pDesc->as);
+			insert_shader_bindless(pDesc->vs);
+			insert_shader_bindless(pDesc->hs);
+			insert_shader_bindless(pDesc->ds);
+			insert_shader_bindless(pDesc->gs);
+			insert_shader_bindless(pDesc->ps);
 
 			internal_state->binding_hash = 0;
 			size_t i = 0;
@@ -4171,44 +4232,305 @@ using namespace Vulkan_Internal;
 				wiHelper::hash_combine(internal_state->binding_hash, x.stageFlags);
 				wiHelper::hash_combine(internal_state->binding_hash, internal_state->imageViewTypes[i++]);
 			}
-
-			VkResult res = VK_SUCCESS;
+			for (auto& x : internal_state->bindlessBindings)
+			{
+				wiHelper::hash_combine(internal_state->binding_hash, x.binding);
+				wiHelper::hash_combine(internal_state->binding_hash, x.descriptorCount);
+				wiHelper::hash_combine(internal_state->binding_hash, x.descriptorType);
+				wiHelper::hash_combine(internal_state->binding_hash, x.stageFlags);
+			}
 
 			pso_layout_cache_mutex.lock();
 			if (pso_layout_cache[internal_state->binding_hash].pipelineLayout == VK_NULL_HANDLE)
 			{
-				VkDescriptorSetLayoutCreateInfo descriptorSetlayoutInfo = {};
-				descriptorSetlayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-				descriptorSetlayoutInfo.pBindings = internal_state->layoutBindings.data();
-				descriptorSetlayoutInfo.bindingCount = static_cast<uint32_t>(internal_state->layoutBindings.size());
-				res = vkCreateDescriptorSetLayout(device, &descriptorSetlayoutInfo, nullptr, &internal_state->descriptorSetLayout);
-				assert(res == VK_SUCCESS);
-				pso_layout_cache[internal_state->binding_hash].descriptorSetLayout = internal_state->descriptorSetLayout;
+				std::vector<VkDescriptorSetLayout> layouts;
+				{
+					VkDescriptorSetLayoutCreateInfo descriptorSetlayoutInfo = {};
+					descriptorSetlayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+					descriptorSetlayoutInfo.pBindings = internal_state->layoutBindings.data();
+					descriptorSetlayoutInfo.bindingCount = static_cast<uint32_t>(internal_state->layoutBindings.size());
+					res = vkCreateDescriptorSetLayout(device, &descriptorSetlayoutInfo, nullptr, &internal_state->descriptorSetLayout);
+					assert(res == VK_SUCCESS);
+					pso_layout_cache[internal_state->binding_hash].descriptorSetLayout = internal_state->descriptorSetLayout;
+					layouts.push_back(internal_state->descriptorSetLayout);
+				}
+
+				pso_layout_cache[internal_state->binding_hash].bindlessFirstSet = (uint32_t)layouts.size();
+				for (auto& x : internal_state->bindlessBindings)
+				{
+					switch (x.descriptorType)
+					{
+					case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+						layouts.push_back(allocationhandler->bindlessUniformBuffers.descriptorSetLayout);
+						pso_layout_cache[internal_state->binding_hash].bindlessSets.push_back(allocationhandler->bindlessUniformBuffers.descriptorSet);
+						break;
+					case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+						layouts.push_back(allocationhandler->bindlessSampledImages.descriptorSetLayout);
+						pso_layout_cache[internal_state->binding_hash].bindlessSets.push_back(allocationhandler->bindlessSampledImages.descriptorSet);
+						break;
+					case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+						layouts.push_back(allocationhandler->bindlessUniformTexelBuffers.descriptorSetLayout);
+						pso_layout_cache[internal_state->binding_hash].bindlessSets.push_back(allocationhandler->bindlessUniformTexelBuffers.descriptorSet);
+						break;
+					case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+						layouts.push_back(allocationhandler->bindlessStorageBuffers.descriptorSetLayout);
+						pso_layout_cache[internal_state->binding_hash].bindlessSets.push_back(allocationhandler->bindlessStorageBuffers.descriptorSet);
+						break;
+					case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+						layouts.push_back(allocationhandler->bindlessStorageImages.descriptorSetLayout);
+						pso_layout_cache[internal_state->binding_hash].bindlessSets.push_back(allocationhandler->bindlessStorageImages.descriptorSet);
+						break;
+					case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+						layouts.push_back(allocationhandler->bindlessStorageTexelBuffers.descriptorSetLayout);
+						pso_layout_cache[internal_state->binding_hash].bindlessSets.push_back(allocationhandler->bindlessStorageTexelBuffers.descriptorSet);
+						break;
+					case VK_DESCRIPTOR_TYPE_SAMPLER:
+						layouts.push_back(allocationhandler->bindlessSamplers.descriptorSetLayout);
+						pso_layout_cache[internal_state->binding_hash].bindlessSets.push_back(allocationhandler->bindlessSamplers.descriptorSet);
+						break;
+					case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
+						layouts.push_back(allocationhandler->bindlessAccelerationStructures.descriptorSetLayout);
+						pso_layout_cache[internal_state->binding_hash].bindlessSets.push_back(allocationhandler->bindlessAccelerationStructures.descriptorSet);
+						break;
+					default:
+						break;
+					}
+					
+				}
 
 				VkPipelineLayoutCreateInfo pipelineLayoutInfo = {};
 				pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-				pipelineLayoutInfo.pSetLayouts = &internal_state->descriptorSetLayout;
-				pipelineLayoutInfo.setLayoutCount = 1;
-				pipelineLayoutInfo.pushConstantRangeCount = 0;
+				pipelineLayoutInfo.pSetLayouts = layouts.data();
+				pipelineLayoutInfo.setLayoutCount = (uint32_t)layouts.size();
+				if (internal_state->pushconstants.size > 0)
+				{
+					pipelineLayoutInfo.pushConstantRangeCount = 1;
+					pipelineLayoutInfo.pPushConstantRanges = &internal_state->pushconstants;
+				}
+				else
+				{
+					pipelineLayoutInfo.pushConstantRangeCount = 0;
+					pipelineLayoutInfo.pPushConstantRanges = nullptr;
+				}
 
 				res = vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &internal_state->pipelineLayout);
 				assert(res == VK_SUCCESS);
 				pso_layout_cache[internal_state->binding_hash].pipelineLayout = internal_state->pipelineLayout;
 			}
-			else
-			{
-				internal_state->descriptorSetLayout = pso_layout_cache[internal_state->binding_hash].descriptorSetLayout;
-				internal_state->pipelineLayout = pso_layout_cache[internal_state->binding_hash].pipelineLayout;
-			}
+			internal_state->descriptorSetLayout = pso_layout_cache[internal_state->binding_hash].descriptorSetLayout;
+			internal_state->pipelineLayout = pso_layout_cache[internal_state->binding_hash].pipelineLayout;
+			internal_state->bindlessSets = pso_layout_cache[internal_state->binding_hash].bindlessSets;
+			internal_state->bindlessFirstSet = pso_layout_cache[internal_state->binding_hash].bindlessFirstSet;
 			pso_layout_cache_mutex.unlock();
-
-
-			return res == VK_SUCCESS;
 		}
 
-		return true;
+
+		VkGraphicsPipelineCreateInfo& pipelineInfo = internal_state->pipelineInfo;
+		//pipelineInfo.flags = VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT;
+		pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+		pipelineInfo.layout = internal_state->pipelineLayout;
+		pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
+
+		// Shaders:
+
+		uint32_t shaderStageCount = 0;
+		auto& shaderStages = internal_state->shaderStages;
+		if (pso->desc.ms != nullptr && pso->desc.ms->IsValid())
+		{
+			shaderStages[shaderStageCount++] = to_internal(pso->desc.ms)->stageInfo;
+		}
+		if (pso->desc.as != nullptr && pso->desc.as->IsValid())
+		{
+			shaderStages[shaderStageCount++] = to_internal(pso->desc.as)->stageInfo;
+		}
+		if (pso->desc.vs != nullptr && pso->desc.vs->IsValid())
+		{
+			shaderStages[shaderStageCount++] = to_internal(pso->desc.vs)->stageInfo;
+		}
+		if (pso->desc.hs != nullptr && pso->desc.hs->IsValid())
+		{
+			shaderStages[shaderStageCount++] = to_internal(pso->desc.hs)->stageInfo;
+		}
+		if (pso->desc.ds != nullptr && pso->desc.ds->IsValid())
+		{
+			shaderStages[shaderStageCount++] = to_internal(pso->desc.ds)->stageInfo;
+		}
+		if (pso->desc.gs != nullptr && pso->desc.gs->IsValid())
+		{
+			shaderStages[shaderStageCount++] = to_internal(pso->desc.gs)->stageInfo;
+		}
+		if (pso->desc.ps != nullptr && pso->desc.ps->IsValid())
+		{
+			shaderStages[shaderStageCount++] = to_internal(pso->desc.ps)->stageInfo;
+		}
+		pipelineInfo.stageCount = shaderStageCount;
+		pipelineInfo.pStages = shaderStages;
+
+
+		// Fixed function states:
+
+		// Primitive type:
+		VkPipelineInputAssemblyStateCreateInfo& inputAssembly = internal_state->inputAssembly;
+		inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+		switch (pso->desc.pt)
+		{
+		case POINTLIST:
+			inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+			break;
+		case LINELIST:
+			inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+			break;
+		case LINESTRIP:
+			inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
+			break;
+		case TRIANGLESTRIP:
+			inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+			break;
+		case TRIANGLELIST:
+			inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+			break;
+		case PATCHLIST:
+			inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
+			break;
+		default:
+			break;
+		}
+		inputAssembly.primitiveRestartEnable = VK_FALSE;
+
+		pipelineInfo.pInputAssemblyState = &inputAssembly;
+
+
+		// Rasterizer:
+		VkPipelineRasterizationStateCreateInfo& rasterizer = internal_state->rasterizer;
+		rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+		rasterizer.depthClampEnable = VK_TRUE;
+		rasterizer.rasterizerDiscardEnable = VK_FALSE;
+		rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+		rasterizer.lineWidth = 1.0f;
+		rasterizer.cullMode = VK_CULL_MODE_NONE;
+		rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+		rasterizer.depthBiasEnable = VK_FALSE;
+		rasterizer.depthBiasConstantFactor = 0.0f;
+		rasterizer.depthBiasClamp = 0.0f;
+		rasterizer.depthBiasSlopeFactor = 0.0f;
+
+		// depth clip will be enabled via Vulkan 1.1 extension VK_EXT_depth_clip_enable:
+		VkPipelineRasterizationDepthClipStateCreateInfoEXT& depthclip = internal_state->depthclip;
+		depthclip.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_DEPTH_CLIP_STATE_CREATE_INFO_EXT;
+		depthclip.depthClipEnable = VK_TRUE;
+		rasterizer.pNext = &depthclip;
+
+		if (pso->desc.rs != nullptr)
+		{
+			const RasterizerState& desc = *pso->desc.rs;
+
+			switch (desc.FillMode)
+			{
+			case FILL_WIREFRAME:
+				rasterizer.polygonMode = VK_POLYGON_MODE_LINE;
+				break;
+			case FILL_SOLID:
+			default:
+				rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+				break;
+			}
+
+			switch (desc.CullMode)
+			{
+			case CULL_BACK:
+				rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+				break;
+			case CULL_FRONT:
+				rasterizer.cullMode = VK_CULL_MODE_FRONT_BIT;
+				break;
+			case CULL_NONE:
+			default:
+				rasterizer.cullMode = VK_CULL_MODE_NONE;
+				break;
+			}
+
+			rasterizer.frontFace = desc.FrontCounterClockwise ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE;
+			rasterizer.depthBiasEnable = desc.DepthBias != 0 || desc.SlopeScaledDepthBias != 0;
+			rasterizer.depthBiasConstantFactor = static_cast<float>(desc.DepthBias);
+			rasterizer.depthBiasClamp = desc.DepthBiasClamp;
+			rasterizer.depthBiasSlopeFactor = desc.SlopeScaledDepthBias;
+
+			// depth clip is extension in Vulkan 1.1:
+			depthclip.depthClipEnable = desc.DepthClipEnable ? VK_TRUE : VK_FALSE;
+		}
+
+		pipelineInfo.pRasterizationState = &rasterizer;
+
+
+		// Viewport, Scissor:
+		VkViewport& viewport = internal_state->viewport;
+		viewport.x = 0;
+		viewport.y = 0;
+		viewport.width = 65535;
+		viewport.height = 65535;
+		viewport.minDepth = 0;
+		viewport.maxDepth = 1;
+
+		VkRect2D& scissor = internal_state->scissor;
+		scissor.extent.width = 65535;
+		scissor.extent.height = 65535;
+
+		VkPipelineViewportStateCreateInfo& viewportState = internal_state->viewportState;
+		viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+		viewportState.viewportCount = 1;
+		viewportState.pViewports = &viewport;
+		viewportState.scissorCount = 1;
+		viewportState.pScissors = &scissor;
+
+		pipelineInfo.pViewportState = &viewportState;
+
+
+		// Depth-Stencil:
+		VkPipelineDepthStencilStateCreateInfo& depthstencil = internal_state->depthstencil;
+		depthstencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+		if (pso->desc.dss != nullptr)
+		{
+			depthstencil.depthTestEnable = pso->desc.dss->DepthEnable ? VK_TRUE : VK_FALSE;
+			depthstencil.depthWriteEnable = pso->desc.dss->DepthWriteMask == DEPTH_WRITE_MASK_ZERO ? VK_FALSE : VK_TRUE;
+			depthstencil.depthCompareOp = _ConvertComparisonFunc(pso->desc.dss->DepthFunc);
+
+			depthstencil.stencilTestEnable = pso->desc.dss->StencilEnable ? VK_TRUE : VK_FALSE;
+
+			depthstencil.front.compareMask = pso->desc.dss->StencilReadMask;
+			depthstencil.front.writeMask = pso->desc.dss->StencilWriteMask;
+			depthstencil.front.reference = 0; // runtime supplied
+			depthstencil.front.compareOp = _ConvertComparisonFunc(pso->desc.dss->FrontFace.StencilFunc);
+			depthstencil.front.passOp = _ConvertStencilOp(pso->desc.dss->FrontFace.StencilPassOp);
+			depthstencil.front.failOp = _ConvertStencilOp(pso->desc.dss->FrontFace.StencilFailOp);
+			depthstencil.front.depthFailOp = _ConvertStencilOp(pso->desc.dss->FrontFace.StencilDepthFailOp);
+
+			depthstencil.back.compareMask = pso->desc.dss->StencilReadMask;
+			depthstencil.back.writeMask = pso->desc.dss->StencilWriteMask;
+			depthstencil.back.reference = 0; // runtime supplied
+			depthstencil.back.compareOp = _ConvertComparisonFunc(pso->desc.dss->BackFace.StencilFunc);
+			depthstencil.back.passOp = _ConvertStencilOp(pso->desc.dss->BackFace.StencilPassOp);
+			depthstencil.back.failOp = _ConvertStencilOp(pso->desc.dss->BackFace.StencilFailOp);
+			depthstencil.back.depthFailOp = _ConvertStencilOp(pso->desc.dss->BackFace.StencilDepthFailOp);
+
+			depthstencil.depthBoundsTestEnable = VK_FALSE;
+		}
+
+		pipelineInfo.pDepthStencilState = &depthstencil;
+
+
+		// Tessellation:
+		VkPipelineTessellationStateCreateInfo& tessellationInfo = internal_state->tessellationInfo;
+		tessellationInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO;
+		tessellationInfo.patchControlPoints = 3;
+
+		pipelineInfo.pTessellationState = &tessellationInfo;
+
+
+		pipelineInfo.pDynamicState = &dynamicStateInfo;
+
+		return res == VK_TRUE;
 	}
-	bool GraphicsDevice_Vulkan::CreateRenderPass(const RenderPassDesc* pDesc, RenderPass* renderpass)
+	bool GraphicsDevice_Vulkan::CreateRenderPass(const RenderPassDesc* pDesc, RenderPass* renderpass) const
 	{
 		auto internal_state = std::make_shared<RenderPass_Vulkan>();
 		internal_state->allocationhandler = allocationhandler;
@@ -4522,7 +4844,7 @@ using namespace Vulkan_Internal;
 
 		return res == VK_SUCCESS;
 	}
-	bool GraphicsDevice_Vulkan::CreateRaytracingAccelerationStructure(const RaytracingAccelerationStructureDesc* pDesc, RaytracingAccelerationStructure* bvh)
+	bool GraphicsDevice_Vulkan::CreateRaytracingAccelerationStructure(const RaytracingAccelerationStructureDesc* pDesc, RaytracingAccelerationStructure* bvh) const
 	{
 		auto internal_state = std::make_shared<BVH_Vulkan>();
 		internal_state->allocationhandler = allocationhandler;
@@ -4679,6 +5001,29 @@ using namespace Vulkan_Internal;
 		internal_state->scratch_address = vkGetBufferDeviceAddress(device, &addressinfo)
 			+ internal_state->sizeInfo.accelerationStructureSize;
 
+
+		if (pDesc->type == RaytracingAccelerationStructureDesc::TOPLEVEL)
+		{
+			int index = allocationhandler->bindlessAccelerationStructures.allocate();
+			if (index >= 0)
+			{
+				VkWriteDescriptorSetAccelerationStructureKHR acc = {};
+				acc.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
+				acc.accelerationStructureCount = 1;
+				acc.pAccelerationStructures = &internal_state->resource;
+
+				VkWriteDescriptorSet write = {};
+				write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+				write.descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+				write.dstBinding = 0;
+				write.dstArrayElement = index;
+				write.descriptorCount = 1;
+				write.dstSet = allocationhandler->bindlessAccelerationStructures.descriptorSet;
+				write.pNext = &acc;
+				vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+			}
+		}
+
 #if 0
 		buildAccelerationStructuresKHR(
 			device,
@@ -4691,7 +5036,7 @@ using namespace Vulkan_Internal;
 
 		return res == VK_SUCCESS;
 	}
-	bool GraphicsDevice_Vulkan::CreateRaytracingPipelineState(const RaytracingPipelineStateDesc* pDesc, RaytracingPipelineState* rtpso)
+	bool GraphicsDevice_Vulkan::CreateRaytracingPipelineState(const RaytracingPipelineStateDesc* pDesc, RaytracingPipelineState* rtpso) const
 	{
 		auto internal_state = std::make_shared<RTPipelineState_Vulkan>();
 		internal_state->allocationhandler = allocationhandler;
@@ -4766,14 +5111,7 @@ using namespace Vulkan_Internal;
 
 		info.maxPipelineRayRecursionDepth = pDesc->max_trace_recursion_depth;
 
-		if (pDesc->rootSignature == nullptr)
-		{
-			info.layout = to_internal(pDesc->shaderlibraries.front().shader)->pipelineLayout_cs; // think better way
-		}
-		else
-		{
-			info.layout = to_internal(pDesc->rootSignature)->pipelineLayout;
-		}
+		info.layout = to_internal(pDesc->shaderlibraries.front().shader)->pipelineLayout_cs; // think better way
 
 		//VkRayTracingPipelineInterfaceCreateInfoKHR library_interface = {};
 		//library_interface.sType = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_INTERFACE_CREATE_INFO_KHR;
@@ -4797,268 +5135,8 @@ using namespace Vulkan_Internal;
 
 		return res == VK_SUCCESS;
 	}
-	bool GraphicsDevice_Vulkan::CreateDescriptorTable(DescriptorTable* table)
-	{
-		auto internal_state = std::make_shared<DescriptorTable_Vulkan>();
-		internal_state->allocationhandler = allocationhandler;
-		table->internal_state = internal_state;
-
-		std::vector<VkDescriptorSetLayoutBinding> bindings;
-		bindings.reserve(table->samplers.size() + table->resources.size() + table->staticsamplers.size());
-
-		std::vector<VkDescriptorUpdateTemplateEntry> entries;
-		entries.reserve(table->samplers.size() + table->resources.size());
-
-		internal_state->descriptors.reserve(table->samplers.size() + table->resources.size());
-
-		size_t offset = 0;
-		for (auto& x : table->resources)
-		{
-			bindings.emplace_back();
-			auto& binding = bindings.back();
-			binding = {};
-			binding.stageFlags = _ConvertStageFlags(table->stage);
-			binding.descriptorCount = x.count;
-
-			switch (x.binding)
-			{
-			case ROOT_CONSTANTBUFFER:
-				binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-				binding.binding = x.slot + VULKAN_BINDING_SHIFT_B;
-				break;
-			case ROOT_RAWBUFFER:
-			case ROOT_STRUCTUREDBUFFER:
-			case ROOT_RWRAWBUFFER:
-			case ROOT_RWSTRUCTUREDBUFFER:
-				binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
-				binding.binding = x.slot + VULKAN_BINDING_SHIFT_T;
-				break;
-
-			case CONSTANTBUFFER:
-				binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-				binding.binding = x.slot + VULKAN_BINDING_SHIFT_B;
-				break;
-			case RAWBUFFER:
-			case STRUCTUREDBUFFER:
-				binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-				binding.binding = x.slot + VULKAN_BINDING_SHIFT_T;
-				break;
-			case TYPEDBUFFER:
-				binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
-				binding.binding = x.slot + VULKAN_BINDING_SHIFT_T;
-				break;
-			case TEXTURE1D:
-			case TEXTURE1DARRAY:
-			case TEXTURE2D:
-			case TEXTURE2DARRAY:
-			case TEXTURECUBE:
-			case TEXTURECUBEARRAY:
-			case TEXTURE3D:
-				binding.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-				binding.binding = x.slot + VULKAN_BINDING_SHIFT_T;
-				break;
-			case ACCELERATIONSTRUCTURE:
-				binding.descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-				binding.binding = x.slot + VULKAN_BINDING_SHIFT_T;
-				break;
-			case RWRAWBUFFER:
-			case RWSTRUCTUREDBUFFER:
-				binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-				binding.binding = x.slot + VULKAN_BINDING_SHIFT_U;
-				break;
-			case RWTYPEDBUFFER:
-				binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
-				binding.binding = x.slot + VULKAN_BINDING_SHIFT_U;
-				break;
-			case RWTEXTURE1D:
-			case RWTEXTURE1DARRAY:
-			case RWTEXTURE2D:
-			case RWTEXTURE2DARRAY:
-			case RWTEXTURE3D:
-				binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-				binding.binding = x.slot + VULKAN_BINDING_SHIFT_U;
-				break;
-			default:
-				assert(0);
-				break;
-			}
-
-			// Unroll, because we need the ability to update an array element individually:
-			internal_state->resource_write_remap.push_back(entries.size());
-			for (uint32_t i = 0; i < binding.descriptorCount; ++i)
-			{
-				internal_state->descriptors.emplace_back();
-				entries.emplace_back();
-				auto& entry = entries.back();
-				entry = {};
-				entry.descriptorCount = 1;
-				entry.descriptorType = binding.descriptorType;
-				entry.dstArrayElement = i;
-				entry.dstBinding = binding.binding;
-				entry.offset = offset;
-				entry.stride = sizeof(DescriptorTable_Vulkan::Descriptor);
-
-				offset += entry.stride;
-			}
-		}
-		for (auto& x : table->samplers)
-		{
-			internal_state->descriptors.emplace_back();
-			bindings.emplace_back();
-			auto& binding = bindings.back();
-			binding = {};
-			binding.stageFlags = _ConvertStageFlags(table->stage);
-			binding.descriptorCount = x.count;
-			binding.binding = x.slot + VULKAN_BINDING_SHIFT_S;
-			binding.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
-
-			// Unroll, because we need the ability to update an array element individually:
-			internal_state->sampler_write_remap.push_back(entries.size());
-			for (uint32_t i = 0; i < binding.descriptorCount; ++i)
-			{
-				entries.emplace_back();
-				auto& entry = entries.back();
-				entry = {};
-				entry.descriptorCount = 1;
-				entry.descriptorType = binding.descriptorType;
-				entry.dstArrayElement = i;
-				entry.dstBinding = binding.binding;
-				entry.offset = offset;
-				entry.stride = sizeof(DescriptorTable_Vulkan::Descriptor);
-
-				offset += entry.stride;
-			}
-		}
-
-		std::vector<VkSampler> immutableSamplers;
-		immutableSamplers.reserve(table->staticsamplers.size());
-
-		for (auto& x : table->staticsamplers)
-		{
-			immutableSamplers.emplace_back();
-			auto& immutablesampler = immutableSamplers.back();
-			immutablesampler = to_internal(&x.sampler)->resource;
-
-			bindings.emplace_back();
-			auto& binding = bindings.back();
-			binding.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
-			binding.stageFlags = VK_SHADER_STAGE_ALL;
-			binding.binding = x.slot + VULKAN_BINDING_SHIFT_S;
-			binding.descriptorCount = 1;
-			binding.pImmutableSamplers = &immutablesampler;
-		}
-
-		VkDescriptorSetLayoutCreateInfo layoutinfo = {};
-		layoutinfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-		layoutinfo.flags = 0;
-		layoutinfo.pBindings = bindings.data();
-		layoutinfo.bindingCount = (uint32_t)bindings.size();
-		VkResult res = vkCreateDescriptorSetLayout(device, &layoutinfo, nullptr, &internal_state->layout);
-		assert(res == VK_SUCCESS);
-
-		VkDescriptorUpdateTemplateCreateInfo updatetemplateinfo = {};
-		updatetemplateinfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_UPDATE_TEMPLATE_CREATE_INFO;
-		updatetemplateinfo.templateType = VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET;
-		updatetemplateinfo.flags = 0;
-		updatetemplateinfo.descriptorSetLayout = internal_state->layout;
-		updatetemplateinfo.pDescriptorUpdateEntries = entries.data();
-		updatetemplateinfo.descriptorUpdateEntryCount = (uint32_t)entries.size();
-		res = vkCreateDescriptorUpdateTemplate(device, &updatetemplateinfo, nullptr, &internal_state->updatetemplate);
-		assert(res == VK_SUCCESS);
-
-		uint32_t slot = 0;
-		for (auto& x : table->resources)
-		{
-			for (uint32_t i = 0; i < x.count; ++i)
-			{
-				WriteDescriptor(table, slot, i, (const GPUResource*)nullptr);
-			}
-			slot++;
-		}
-		slot = 0;
-		for (auto& x : table->samplers)
-		{
-			for (uint32_t i = 0; i < x.count; ++i)
-			{
-				WriteDescriptor(table, slot, i, (const Sampler*)nullptr);
-			}
-			slot++;
-		}
-
-		return res == VK_SUCCESS;
-	}
-	bool GraphicsDevice_Vulkan::CreateRootSignature(RootSignature* rootsig)
-	{
-		auto internal_state = std::make_shared<RootSignature_Vulkan>();
-		internal_state->allocationhandler = allocationhandler;
-		rootsig->internal_state = internal_state;
-
-		std::vector<VkDescriptorSetLayout> layouts;
-		layouts.reserve(rootsig->tables.size());
-		uint32_t space = 0;
-		for (auto& x : rootsig->tables)
-		{
-			layouts.push_back(to_internal(&x)->layout);
-
-			uint32_t rangeIndex = 0;
-			for (auto& binding : x.resources)
-			{
-				if (binding.binding < CONSTANTBUFFER)
-				{
-					assert(binding.count == 1); // descriptor array not allowed in the root
-					internal_state->root_remap.emplace_back();
-					internal_state->root_remap.back().space = space;
-					internal_state->root_remap.back().binding = binding.slot;
-					internal_state->root_remap.back().rangeIndex = rangeIndex;
-				}
-				rangeIndex++;
-			}
-			space++;
-		}
-
-		for (CommandList cmd = 0; cmd < COMMANDLIST_COUNT; ++cmd)
-		{
-			internal_state->last_tables[cmd].resize(layouts.size());
-			internal_state->last_descriptorsets[cmd].resize(layouts.size());
-
-			for (auto& x : rootsig->tables)
-			{
-				for (auto& binding : x.resources)
-				{
-					if (binding.binding < CONSTANTBUFFER)
-					{
-						internal_state->root_descriptors[cmd].emplace_back();
-						internal_state->root_offsets[cmd].emplace_back();
-					}
-				}
-			}
-		}
-
-		std::vector<VkPushConstantRange> pushranges;
-		pushranges.reserve(rootsig->rootconstants.size());
-		for (auto& x : rootsig->rootconstants)
-		{
-			pushranges.emplace_back();
-			pushranges.back() = {};
-			pushranges.back().stageFlags = _ConvertStageFlags(x.stage);
-			pushranges.back().offset = 0;
-			pushranges.back().size = x.size;
-		}
-
-		VkPipelineLayoutCreateInfo pipelineLayoutInfo = {};
-		pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-		pipelineLayoutInfo.pSetLayouts = layouts.data();
-		pipelineLayoutInfo.setLayoutCount = (uint32_t)layouts.size();
-		pipelineLayoutInfo.pPushConstantRanges = pushranges.data();
-		pipelineLayoutInfo.pushConstantRangeCount = (uint32_t)pushranges.size();
-
-		VkResult res = vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &internal_state->pipelineLayout);
-		assert(res == VK_SUCCESS);
-
-		return res == VK_SUCCESS;
-	}
-
-	int GraphicsDevice_Vulkan::CreateSubresource(Texture* texture, SUBRESOURCE_TYPE type, uint32_t firstSlice, uint32_t sliceCount, uint32_t firstMip, uint32_t mipCount)
+	
+	int GraphicsDevice_Vulkan::CreateSubresource(Texture* texture, SUBRESOURCE_TYPE type, uint32_t firstSlice, uint32_t sliceCount, uint32_t firstMip, uint32_t mipCount) const
 	{
 		auto internal_state = to_internal(texture);
 
@@ -5141,14 +5219,33 @@ using namespace Vulkan_Internal;
 			VkImageView srv;
 			VkResult res = vkCreateImageView(device, &view_desc, nullptr, &srv);
 
+			int index = allocationhandler->bindlessSampledImages.allocate();
+			if (index >= 0)
+			{
+				VkDescriptorImageInfo imageInfo = {};
+				imageInfo.imageView = srv;
+				imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+				VkWriteDescriptorSet write = {};
+				write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+				write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+				write.dstBinding = 0;
+				write.dstArrayElement = index;
+				write.descriptorCount = 1;
+				write.dstSet = allocationhandler->bindlessSampledImages.descriptorSet;
+				write.pImageInfo = &imageInfo;
+				vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+			}
+
 			if (res == VK_SUCCESS)
 			{
 				if (internal_state->srv == VK_NULL_HANDLE)
 				{
 					internal_state->srv = srv;
+					internal_state->srv_index = index;
 					return -1;
 				}
 				internal_state->subresources_srv.push_back(srv);
+				internal_state->subresources_srv_index.push_back(index);
 				return int(internal_state->subresources_srv.size() - 1);
 			}
 			else
@@ -5167,14 +5264,33 @@ using namespace Vulkan_Internal;
 			VkImageView uav;
 			VkResult res = vkCreateImageView(device, &view_desc, nullptr, &uav);
 
+			int index = allocationhandler->bindlessStorageImages.allocate();
+			if (index >= 0)
+			{
+				VkDescriptorImageInfo imageInfo = {};
+				imageInfo.imageView = uav;
+				imageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+				VkWriteDescriptorSet write = {};
+				write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+				write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+				write.dstBinding = 0;
+				write.dstArrayElement = index;
+				write.descriptorCount = 1;
+				write.dstSet = allocationhandler->bindlessStorageImages.descriptorSet;
+				write.pImageInfo = &imageInfo;
+				vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+			}
+
 			if (res == VK_SUCCESS)
 			{
 				if (internal_state->uav == VK_NULL_HANDLE)
 				{
 					internal_state->uav = uav;
+					internal_state->uav_index = index;
 					return -1;
 				}
 				internal_state->subresources_uav.push_back(uav);
+				internal_state->subresources_uav_index.push_back(index);
 				return int(internal_state->subresources_uav.size() - 1);
 			}
 			else
@@ -5256,7 +5372,7 @@ using namespace Vulkan_Internal;
 		}
 		return -1;
 	}
-	int GraphicsDevice_Vulkan::CreateSubresource(GPUBuffer* buffer, SUBRESOURCE_TYPE type, uint64_t offset, uint64_t size)
+	int GraphicsDevice_Vulkan::CreateSubresource(GPUBuffer* buffer, SUBRESOURCE_TYPE type, uint64_t offset, uint64_t size) const
 	{
 		auto internal_state = to_internal(buffer);
 		const GPUBufferDesc& desc = buffer->GetDesc();
@@ -5264,51 +5380,149 @@ using namespace Vulkan_Internal;
 
 		switch (type)
 		{
+		case wiGraphics::CBV:
+		{
+			int index = allocationhandler->bindlessUniformBuffers.allocate();
+			if (index >= 0)
+			{
+				VkDescriptorBufferInfo bufferInfo = {};
+				bufferInfo.buffer = internal_state->resource;
+				bufferInfo.offset = offset;
+				bufferInfo.range = size;
+				VkWriteDescriptorSet write = {};
+				write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+				write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+				write.dstBinding = 0;
+				write.dstArrayElement = index;
+				write.descriptorCount = 1;
+				write.dstSet = allocationhandler->bindlessUniformBuffers.descriptorSet;
+				write.pBufferInfo = &bufferInfo;
+				vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+				internal_state->cbv_index = index;
+			}
+			return -1;
+		}
+		break;
+
 		case wiGraphics::SRV:
 		case wiGraphics::UAV:
 		{
 			if (desc.Format == FORMAT_UNKNOWN)
 			{
-				return -1;
-			}
+				// Raw buffer
+				int index = allocationhandler->bindlessStorageBuffers.allocate();
+				if (index >= 0)
+				{
+					VkDescriptorBufferInfo bufferInfo = {};
+					bufferInfo.buffer = internal_state->resource;
+					bufferInfo.offset = offset;
+					bufferInfo.range = size;
+					VkWriteDescriptorSet write = {};
+					write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+					write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+					write.dstBinding = 0;
+					write.dstArrayElement = index;
+					write.descriptorCount = 1;
+					write.dstSet = allocationhandler->bindlessStorageBuffers.descriptorSet;
+					write.pBufferInfo = &bufferInfo;
+					vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+				}
 
-			VkBufferViewCreateInfo srv_desc = {};
-			srv_desc.sType = VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO;
-			srv_desc.buffer = internal_state->resource;
-			srv_desc.flags = 0;
-			srv_desc.format = _ConvertFormat(desc.Format);
-			srv_desc.offset = Align(offset, properties2.properties.limits.minTexelBufferOffsetAlignment); // damn, if this needs alignment, that could break a lot of things! (index buffer, index offset?)
-			srv_desc.range = std::min(size, (uint64_t)desc.ByteWidth - srv_desc.offset);
-
-			VkBufferView view;
-			res = vkCreateBufferView(device, &srv_desc, nullptr, &view);
-
-			if (res == VK_SUCCESS)
-			{
 				if (type == SRV)
 				{
-					if (internal_state->srv == VK_NULL_HANDLE)
+					if (internal_state->srv_index == -1)
 					{
-						internal_state->srv = view;
+						internal_state->srv_index = index;
 						return -1;
 					}
-					internal_state->subresources_srv.push_back(view);
-					return int(internal_state->subresources_srv.size() - 1);
+					internal_state->subresources_srv_index.push_back(index);
+					return int(internal_state->subresources_srv_index.size() - 1);
 				}
 				else
 				{
-					if (internal_state->uav == VK_NULL_HANDLE)
+					if (internal_state->uav_index == -1)
 					{
-						internal_state->uav = view;
+						internal_state->uav_index = index;
 						return -1;
 					}
-					internal_state->subresources_uav.push_back(view);
-					return int(internal_state->subresources_uav.size() - 1);
+					internal_state->subresources_uav_index.push_back(index);
+					return int(internal_state->subresources_uav_index.size() - 1);
 				}
 			}
 			else
 			{
-				assert(0);
+				// Typed buffer
+
+				VkBufferViewCreateInfo srv_desc = {};
+				srv_desc.sType = VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO;
+				srv_desc.buffer = internal_state->resource;
+				srv_desc.flags = 0;
+				srv_desc.format = _ConvertFormat(desc.Format);
+				srv_desc.offset = Align(offset, properties2.properties.limits.minTexelBufferOffsetAlignment); // damn, if this needs alignment, that could break a lot of things! (index buffer, index offset?)
+				srv_desc.range = std::min(size, (uint64_t)desc.ByteWidth - srv_desc.offset);
+
+				VkBufferView view;
+				res = vkCreateBufferView(device, &srv_desc, nullptr, &view);
+
+				if (res == VK_SUCCESS)
+				{
+					if (type == SRV)
+					{
+						int index = allocationhandler->bindlessUniformTexelBuffers.allocate();
+						if (index >= 0)
+						{
+							VkWriteDescriptorSet write = {};
+							write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+							write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
+							write.dstBinding = 0;
+							write.dstArrayElement = index;
+							write.descriptorCount = 1;
+							write.dstSet = allocationhandler->bindlessUniformTexelBuffers.descriptorSet;
+							write.pTexelBufferView = &view;
+							vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+						}
+
+						if (internal_state->srv == VK_NULL_HANDLE)
+						{
+							internal_state->srv = view;
+							internal_state->srv_index = index;
+							return -1;
+						}
+						internal_state->subresources_srv.push_back(view);
+						internal_state->subresources_srv_index.push_back(index);
+						return int(internal_state->subresources_srv.size() - 1);
+					}
+					else
+					{
+						int index = allocationhandler->bindlessStorageTexelBuffers.allocate();
+						if (index >= 0)
+						{
+							VkWriteDescriptorSet write = {};
+							write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+							write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
+							write.dstBinding = 0;
+							write.dstArrayElement = index;
+							write.descriptorCount = 1;
+							write.dstSet = allocationhandler->bindlessStorageTexelBuffers.descriptorSet;
+							write.pTexelBufferView = &view;
+							vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+						}
+
+						if (internal_state->uav == VK_NULL_HANDLE)
+						{
+							internal_state->uav = view;
+							internal_state->uav_index = index;
+							return -1;
+						}
+						internal_state->subresources_uav.push_back(view);
+						internal_state->subresources_uav_index.push_back(index);
+						return int(internal_state->subresources_uav.size() - 1);
+					}
+				}
+				else
+				{
+					assert(0);
+				}
 			}
 		}
 		break;
@@ -5319,7 +5533,92 @@ using namespace Vulkan_Internal;
 		return -1;
 	}
 
-	void GraphicsDevice_Vulkan::WriteShadingRateValue(SHADING_RATE rate, void* dest)
+	int GraphicsDevice_Vulkan::GetDescriptorIndex(const GPUResource* resource, SUBRESOURCE_TYPE type, int subresource) const
+	{
+		if (resource == nullptr || !resource->IsValid())
+			return -1;
+
+		switch (type)
+		{
+		default:
+		case wiGraphics::CBV:
+			if (resource->IsBuffer())
+			{
+				auto internal_state = to_internal((const GPUBuffer*)resource);
+				return internal_state->cbv_index;
+			}
+			break;
+		case wiGraphics::SRV:
+			if (resource->IsBuffer())
+			{
+				auto internal_state = to_internal((const GPUBuffer*)resource);
+				if (subresource < 0)
+				{
+					return internal_state->srv_index;
+				}
+				else
+				{
+					return internal_state->subresources_srv_index[subresource];
+				}
+			}
+			else if(resource->IsTexture())
+			{
+				auto internal_state = to_internal((const Texture*)resource);
+				if (subresource < 0)
+				{
+					return internal_state->srv_index;
+				}
+				else
+				{
+					return internal_state->subresources_srv_index[subresource];
+				}
+			}
+			else if (resource->IsAccelerationStructure())
+			{
+				auto internal_state = to_internal((const RaytracingAccelerationStructure*)resource);
+				return internal_state->index;
+			}
+			break;
+		case wiGraphics::UAV:
+			if (resource->IsBuffer())
+			{
+				auto internal_state = to_internal((const GPUBuffer*)resource);
+				if (subresource < 0)
+				{
+					return internal_state->uav_index;
+				}
+				else
+				{
+					return internal_state->subresources_uav_index[subresource];
+				}
+			}
+			else if (resource->IsTexture())
+			{
+				auto internal_state = to_internal((const Texture*)resource);
+				if (subresource < 0)
+				{
+					return internal_state->uav_index;
+				}
+				else
+				{
+					return internal_state->subresources_uav_index[subresource];
+				}
+			}
+			break;
+		}
+
+		return -1;
+	}
+	int GraphicsDevice_Vulkan::GetDescriptorIndex(const Sampler* sampler) const
+	{
+		if (sampler == nullptr || !sampler->IsValid())
+			return -1;
+
+		auto internal_state = to_internal(sampler);
+		return internal_state->index;
+	}
+
+	void GraphicsDevice_Vulkan::WriteShadingRateValue(SHADING_RATE rate, void* dest) const
 	{
 		// How to compute shading rate value texel data:
 		// https://www.khronos.org/registry/vulkan/specs/1.2-extensions/html/vkspec.html#primsrast-fragment-shading-rate-attachment
@@ -5351,7 +5650,7 @@ using namespace Vulkan_Internal;
 		}
 
 	}
-	void GraphicsDevice_Vulkan::WriteTopLevelAccelerationStructureInstance(const RaytracingAccelerationStructureDesc::TopLevel::Instance* instance, void* dest)
+	void GraphicsDevice_Vulkan::WriteTopLevelAccelerationStructureInstance(const RaytracingAccelerationStructureDesc::TopLevel::Instance* instance, void* dest) const
 	{
 		VkAccelerationStructureInstanceKHR* desc = (VkAccelerationStructureInstanceKHR*)dest;
 		memcpy(&desc->transform, &instance->transform, sizeof(desc->transform));
@@ -5364,252 +5663,13 @@ using namespace Vulkan_Internal;
 		auto internal_state = to_internal((RaytracingAccelerationStructure*)&instance->bottomlevel);
 		desc->accelerationStructureReference = internal_state->as_address;
 	}
-	void GraphicsDevice_Vulkan::WriteShaderIdentifier(const RaytracingPipelineState* rtpso, uint32_t group_index, void* dest)
+	void GraphicsDevice_Vulkan::WriteShaderIdentifier(const RaytracingPipelineState* rtpso, uint32_t group_index, void* dest) const
 	{
 		VkResult res = vkGetRayTracingShaderGroupHandlesKHR(device, to_internal(rtpso)->pipeline, group_index, 1, SHADER_IDENTIFIER_SIZE, dest);
 		assert(res == VK_SUCCESS);
 	}
-	void GraphicsDevice_Vulkan::WriteDescriptor(const DescriptorTable* table, uint32_t rangeIndex, uint32_t arrayIndex, const GPUResource* resource, int subresource, uint64_t offset)
-	{
-		auto table_internal = to_internal(table);
-		size_t remap = table_internal->resource_write_remap[rangeIndex];
-		auto& descriptor = table_internal->descriptors[remap + arrayIndex];
-
-		switch (table->resources[rangeIndex].binding)
-		{
-		case CONSTANTBUFFER:
-		case RAWBUFFER:
-		case STRUCTUREDBUFFER:
-		case ROOT_CONSTANTBUFFER:
-		case ROOT_RAWBUFFER:
-		case ROOT_STRUCTUREDBUFFER:
-			if (resource == nullptr || !resource->IsValid())
-			{
-				descriptor.bufferInfo.buffer = nullBuffer;
-				descriptor.bufferInfo.offset = 0;
-				descriptor.bufferInfo.range = VK_WHOLE_SIZE;
-			}
-			else if (resource->IsBuffer())
-			{
-				const GPUBuffer* buffer = (const GPUBuffer*)resource;
-				auto internal_state = to_internal(buffer);
-				descriptor.bufferInfo.buffer = internal_state->resource;
-				descriptor.bufferInfo.offset = offset;
-				descriptor.bufferInfo.range = VK_WHOLE_SIZE;
-			}
-			else
-			{
-				assert(0);
-			}
-			break;
-		case TYPEDBUFFER:
-			if (resource == nullptr || !resource->IsValid())
-			{
-				descriptor.bufferView = nullBufferView;
-			}
-			else if (resource->IsBuffer())
-			{
-				const GPUBuffer* buffer = (const GPUBuffer*)resource;
-				auto internal_state = to_internal(buffer);
-				descriptor.bufferView = subresource < 0 ? internal_state->srv : internal_state->subresources_srv[subresource];
-			}
-			else
-			{
-				assert(0);
-			}
-			break;
-		case TEXTURE1D:
-		case TEXTURE1DARRAY:
-		case TEXTURE2D:
-		case TEXTURE2DARRAY:
-		case TEXTURECUBE:
-		case TEXTURECUBEARRAY:
-		case TEXTURE3D:
-			descriptor.imageinfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-			descriptor.imageinfo.sampler = VK_NULL_HANDLE;
-			if (resource == nullptr || !resource->IsValid())
-			{
-				switch (table->resources[rangeIndex].binding)
-				{
-				case TEXTURE1D:
-					descriptor.imageinfo.imageView = nullImageView1D;
-					break;
-				case TEXTURE1DARRAY:
-					descriptor.imageinfo.imageView = nullImageView1DArray;
-					break;
-				case TEXTURE2D:
-					descriptor.imageinfo.imageView = nullImageView2D;
-					break;
-				case TEXTURE2DARRAY:
-					descriptor.imageinfo.imageView = nullImageView2DArray;
-					break;
-				case TEXTURECUBE:
-					descriptor.imageinfo.imageView = nullImageViewCube;
-					break;
-				case TEXTURECUBEARRAY:
-					descriptor.imageinfo.imageView = nullImageViewCubeArray;
-					break;
-				case TEXTURE3D:
-					descriptor.imageinfo.imageView = nullImageView3D;
-					break;
-				};
-			}
-			else if (resource->IsTexture())
-			{
-				const Texture* texture = (const Texture*)resource;
-				auto internal_state = to_internal(texture);
-				if (subresource < 0)
-				{
-					descriptor.imageinfo.imageView = internal_state->srv;
-				}
-				else
-				{
-					descriptor.imageinfo.imageView = internal_state->subresources_srv[subresource];
-				}
-				VkImageLayout layout = _ConvertImageLayout(texture->desc.layout);
-				if (layout != VK_IMAGE_LAYOUT_GENERAL && layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-				{
-					// Means texture initial layout is not compatible, so it must have been transitioned
-					layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-				}
-				descriptor.imageinfo.imageLayout = layout;
-			}
-			else
-			{
-				assert(0);
-			}
-			break;
-		case ACCELERATIONSTRUCTURE:
-			if (resource == nullptr || !resource->IsValid())
-			{
-				// nothing
-			}
-			else if (resource->IsAccelerationStructure())
-			{
-				auto internal_state = to_internal((const RaytracingAccelerationStructure*)resource);
-				descriptor.accelerationStructure = internal_state->resource;
-			}
-			else
-			{
-				assert(0);
-			}
-			break;
-		case RWRAWBUFFER:
-		case RWSTRUCTUREDBUFFER:
-		case ROOT_RWRAWBUFFER:
-		case ROOT_RWSTRUCTUREDBUFFER:
-			if (resource == nullptr || !resource->IsValid())
-			{
-				descriptor.bufferInfo.buffer = nullBuffer;
-				descriptor.bufferInfo.offset = 0;
-				descriptor.bufferInfo.range = VK_WHOLE_SIZE;
-			}
-			else if (resource->IsBuffer())
-			{
-				const GPUBuffer* buffer = (const GPUBuffer*)resource;
-				auto internal_state = to_internal(buffer);
-				descriptor.bufferInfo.buffer = internal_state->resource;
-				descriptor.bufferInfo.offset = offset;
-				descriptor.bufferInfo.range = VK_WHOLE_SIZE;
-			}
-			else
-			{
-				assert(0);
-			}
-			break;
-		case RWTYPEDBUFFER:
-			if (resource == nullptr || !resource->IsValid())
-			{
-				descriptor.bufferView = nullBufferView;
-			}
-			else if (resource->IsBuffer())
-			{
-				const GPUBuffer* buffer = (const GPUBuffer*)resource;
-				auto internal_state = to_internal(buffer);
-				descriptor.bufferView = subresource < 0 ? internal_state->uav : internal_state->subresources_uav[subresource];
-			}
-			else
-			{
-				assert(0);
-			}
-			break;
-		case RWTEXTURE1D:
-		case RWTEXTURE1DARRAY:
-		case RWTEXTURE2D:
-		case RWTEXTURE2DARRAY:
-		case RWTEXTURE3D:
-			descriptor.imageinfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-			descriptor.imageinfo.sampler = VK_NULL_HANDLE;
-			if (resource == nullptr || !resource->IsValid())
-			{
-				switch (table->resources[rangeIndex].binding)
-				{
-				case TEXTURE1D:
-					descriptor.imageinfo.imageView = nullImageView1D;
-					break;
-				case TEXTURE1DARRAY:
-					descriptor.imageinfo.imageView = nullImageView1DArray;
-					break;
-				case TEXTURE2D:
-					descriptor.imageinfo.imageView = nullImageView2D;
-					break;
-				case TEXTURE2DARRAY:
-					descriptor.imageinfo.imageView = nullImageView2DArray;
-					break;
-				case TEXTURECUBE:
-					descriptor.imageinfo.imageView = nullImageViewCube;
-					break;
-				case TEXTURECUBEARRAY:
-					descriptor.imageinfo.imageView = nullImageViewCubeArray;
-					break;
-				case TEXTURE3D:
-					descriptor.imageinfo.imageView = nullImageView3D;
-					break;
-				};
-			}
-			else if (resource->IsTexture())
-			{
-				const Texture* texture = (const Texture*)resource;
-				auto internal_state = to_internal(texture);
-				if (subresource < 0)
-				{
-					descriptor.imageinfo.imageView = internal_state->uav;
-				}
-				else
-				{
-					descriptor.imageinfo.imageView = internal_state->subresources_uav[subresource];
-				}
-			}
-			else
-			{
-				assert(0);
-			}
-			break;
-		default:
-			break;
-		}
-	}
-	void GraphicsDevice_Vulkan::WriteDescriptor(const DescriptorTable* table, uint32_t rangeIndex, uint32_t arrayIndex, const Sampler* sampler)
-	{
-		auto table_internal = to_internal(table);
-		size_t sampler_remap = table->resources.size() + (size_t)rangeIndex;
-		size_t remap = table_internal->sampler_write_remap[rangeIndex];
-		auto& descriptor = table_internal->descriptors[remap];
-		descriptor.imageinfo.imageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		descriptor.imageinfo.imageView = VK_NULL_HANDLE;
-
-		if (sampler == nullptr || !sampler->IsValid())
-		{
-			descriptor.imageinfo.sampler = nullSampler;
-		}
-		else
-		{
-			auto internal_state = to_internal(sampler);
-			descriptor.imageinfo.sampler = internal_state->resource;
-		}
-	}
-
-	void GraphicsDevice_Vulkan::Map(const GPUResource* resource, Mapping* mapping)
+	
+	void GraphicsDevice_Vulkan::Map(const GPUResource* resource, Mapping* mapping) const
 	{
 		VkDeviceMemory memory = VK_NULL_HANDLE;
 
@@ -5644,7 +5704,7 @@ using namespace Vulkan_Internal;
 			mapping->rowpitch = 0;
 		}
 	}
-	void GraphicsDevice_Vulkan::Unmap(const GPUResource* resource)
+	void GraphicsDevice_Vulkan::Unmap(const GPUResource* resource) const
 	{
 		if (resource->type == GPUResource::GPU_RESOURCE_TYPE::BUFFER)
 		{
@@ -5659,39 +5719,30 @@ using namespace Vulkan_Internal;
 			vkUnmapMemory(device, internal_state->allocation->GetMemory());
 		}
 	}
-	bool GraphicsDevice_Vulkan::QueryRead(const GPUQuery* query, GPUQueryResult* result)
+	void GraphicsDevice_Vulkan::QueryRead(const GPUQueryHeap* heap, uint32_t index, uint32_t count, uint64_t* results) const
 	{
-		auto internal_state = to_internal(query);
+		if (count == 0)
+			return;
 
-		VkResult res = VK_SUCCESS;
+		auto internal_state = to_internal(heap);
 
-		switch (internal_state->query_type)
-		{
-		case GPU_QUERY_TYPE_EVENT:
-			assert(0); // not implemented yet
-			break;
-		case GPU_QUERY_TYPE_TIMESTAMP:
-			if (internal_state->query.index == ~0)
-				return false;
-			res = vkGetQueryPoolResults(device, allocationhandler->queries_timestamp.blocks[internal_state->query.block], (uint32_t)internal_state->query.index, 1, sizeof(uint64_t),
-				&result->result_timestamp, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
-			break;
-		case GPU_QUERY_TYPE_TIMESTAMP_DISJOINT:
-			result->result_timestamp_frequency = timestamp_frequency;
-			break;
-		case GPU_QUERY_TYPE_OCCLUSION_PREDICATE:
-		case GPU_QUERY_TYPE_OCCLUSION:
-			if (internal_state->query.index == ~0)
-				return false;
-			res = vkGetQueryPoolResults(device, allocationhandler->queries_occlusion.blocks[internal_state->query.block], (uint32_t)internal_state->query.index, 1, sizeof(uint64_t),
-				&result->result_passed_sample_count, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_PARTIAL_BIT);
-			break;
-		default:
-			return false;
-			break;
-		}
+		VkResult res = vkGetQueryPoolResults(
+			device,
+			internal_state->pool,
+			index,
+			count,
+			sizeof(uint64_t) * count,
+			results,
+			sizeof(uint64_t),
+			VK_QUERY_RESULT_64_BIT
+		);
 
-		return res == VK_SUCCESS;
+		vkResetQueryPool(
+			device,
+			internal_state->pool,
+			index,
+			count
+		);
 	}
 
 	void GraphicsDevice_Vulkan::SetCommonSampler(const StaticSampler* sam)
@@ -5722,7 +5773,7 @@ using namespace Vulkan_Internal;
 				info.objectHandle = (uint64_t)to_internal((const RaytracingAccelerationStructure*)pResource)->resource;
 			}
 
-			if (info.objectHandle == VK_NULL_HANDLE)
+			if (info.objectHandle == (uint64_t)VK_NULL_HANDLE)
 			{
 				return;
 			}
@@ -5732,98 +5783,55 @@ using namespace Vulkan_Internal;
 		}
 	}
 
-	void GraphicsDevice_Vulkan::PresentBegin(CommandList cmd)
-	{
-		VkResult res = vkAcquireNextImageKHR(
-			device, swapChain,
-			0xFFFFFFFFFFFFFFFF,
-			GetFrameResources().swapchainAcquireSemaphore,
-			VK_NULL_HANDLE,
-			&swapChainImageIndex
-		);
-		if (res != VK_SUCCESS)
-		{
-			// Handle outdated error in acquire.
-			if (res == VK_SUBOPTIMAL_KHR || res == VK_ERROR_OUT_OF_DATE_KHR)
-			{
-				CreateBackBufferResources();
-				PresentBegin(cmd);
-				return;
-			}
-		}
-
-		VkClearValue clearColor = { 0.0f, 0.0f, 0.0f, 1.0f };
-		VkRenderPassBeginInfo renderPassInfo = {};
-		renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-		renderPassInfo.renderPass = defaultRenderPass;
-		renderPassInfo.framebuffer = swapChainFramebuffers[swapChainImageIndex];
-		renderPassInfo.renderArea.offset = { 0, 0 };
-		renderPassInfo.renderArea.extent = swapChainExtent;
-		renderPassInfo.clearValueCount = 1;
-		renderPassInfo.pClearValues = &clearColor;
-		vkCmdBeginRenderPass(GetDirectCommandList(cmd), &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-	}
-	void GraphicsDevice_Vulkan::PresentEnd(CommandList cmd)
-	{
-		vkCmdEndRenderPass(GetDirectCommandList(cmd));
-
-		SubmitCommandLists();
-
-		VkPresentInfoKHR presentInfo = {};
-		presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-
-		presentInfo.waitSemaphoreCount = 1;
-		presentInfo.pWaitSemaphores = &frames[swapChainImageIndex].swapchainReleaseSemaphore;
-
-		presentInfo.swapchainCount = 1;
-		presentInfo.pSwapchains = &swapChain;
-		presentInfo.pImageIndices = &swapChainImageIndex;
-
-		VkResult res = vkQueuePresentKHR(presentQueue, &presentInfo);
-		assert(res == VK_SUCCESS);
-
-#if 0
-		VmaStats stats = {};
-		vmaCalculateStats(allocationhandler->allocator, &stats);
-		std::cout << "VMA Stats: " << stats.total.usedBytes;
-#endif
-	}
-
-	CommandList GraphicsDevice_Vulkan::BeginCommandList()
+	CommandList GraphicsDevice_Vulkan::BeginCommandList(QUEUE_TYPE queue)
 	{
 		VkResult res;
 
 		CommandList cmd = cmd_count.fetch_add(1);
-		if (GetDirectCommandList(cmd) == VK_NULL_HANDLE)
+		assert(cmd < COMMANDLIST_COUNT);
+		cmd_meta[cmd].queue = queue;
+		cmd_meta[cmd].waits.clear();
+
+		if (GetCommandList(cmd) == VK_NULL_HANDLE)
 		{
 			// need to create one more command list:
-			assert(cmd < COMMANDLIST_COUNT);
 
 			for (auto& frame : frames)
 			{
 				VkCommandPoolCreateInfo poolInfo = {};
 				poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-				poolInfo.queueFamilyIndex = graphicsFamily;
+				switch (queue)
+				{
+				case wiGraphics::QUEUE_GRAPHICS:
+					poolInfo.queueFamilyIndex = graphicsFamily;
+					break;
+				case wiGraphics::QUEUE_COMPUTE:
+					poolInfo.queueFamilyIndex = computeFamily;
+					break;
+				default:
+					assert(0); // queue type not handled
+					break;
+				}
 				poolInfo.flags = 0; // Optional
 
-				res = vkCreateCommandPool(device, &poolInfo, nullptr, &frame.commandPools[cmd]);
+				res = vkCreateCommandPool(device, &poolInfo, nullptr, &frame.commandPools[cmd][queue]);
 				assert(res == VK_SUCCESS);
 
 				VkCommandBufferAllocateInfo commandBufferInfo = {};
 				commandBufferInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
 				commandBufferInfo.commandBufferCount = 1;
-				commandBufferInfo.commandPool = frame.commandPools[cmd];
+				commandBufferInfo.commandPool = frame.commandPools[cmd][queue];
 				commandBufferInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
 
-				res = vkAllocateCommandBuffers(device, &commandBufferInfo, &frame.commandBuffers[cmd]);
+				res = vkAllocateCommandBuffers(device, &commandBufferInfo, &frame.commandBuffers[cmd][queue]);
 				assert(res == VK_SUCCESS);
 
 				frame.resourceBuffer[cmd].init(this, 1024 * 1024); // 1 MB starting size
 				frame.descriptors[cmd].init(this);
 			}
 		}
-		res = vkResetCommandPool(device, GetFrameResources().commandPools[cmd], 0);
+
+		res = vkResetCommandPool(device, GetFrameResources().commandPools[cmd][queue], 0);
 		assert(res == VK_SUCCESS);
 
 		VkCommandBufferBeginInfo beginInfo = {};
@@ -5831,39 +5839,30 @@ using namespace Vulkan_Internal;
 		beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 		beginInfo.pInheritanceInfo = nullptr; // Optional
 
-		res = vkBeginCommandBuffer(GetFrameResources().commandBuffers[cmd], &beginInfo);
+		res = vkBeginCommandBuffer(GetFrameResources().commandBuffers[cmd][queue], &beginInfo);
 		assert(res == VK_SUCCESS);
-
-		Viewport viewports[6];
-		for (uint32_t i = 0; i < arraysize(viewports); ++i)
-		{
-			viewports[i].TopLeftX = 0;
-			viewports[i].TopLeftY = 0;
-			viewports[i].Width = (float)RESOLUTIONWIDTH;
-			viewports[i].Height = (float)RESOLUTIONHEIGHT;
-			viewports[i].MinDepth = 0;
-			viewports[i].MaxDepth = 1;
-		}
-		BindViewports(arraysize(viewports), viewports, cmd);
-
-		VkRect2D scissors[8];
-		for (int i = 0; i < arraysize(scissors); ++i)
-		{
-			scissors[i].offset.x = 0;
-			scissors[i].offset.y = 0;
-			scissors[i].extent.width = 65535;
-			scissors[i].extent.height = 65535;
-		}
-		vkCmdSetScissor(GetDirectCommandList(cmd), 0, arraysize(scissors), scissors);
-
-		float blendConstants[] = { 1,1,1,1 };
-		vkCmdSetBlendConstants(GetDirectCommandList(cmd), blendConstants);
 
 		// reset descriptor allocators:
 		GetFrameResources().descriptors[cmd].reset();
 
 		// reset immediate resource allocators:
 		GetFrameResources().resourceBuffer[cmd].clear();
+
+		if (queue == QUEUE_GRAPHICS)
+		{
+			VkRect2D scissors[8];
+			for (int i = 0; i < arraysize(scissors); ++i)
+			{
+				scissors[i].offset.x = 0;
+				scissors[i].offset.y = 0;
+				scissors[i].extent.width = 65535;
+				scissors[i].extent.height = 65535;
+			}
+			vkCmdSetScissor(GetCommandList(cmd), 0, arraysize(scissors), scissors);
+
+			float blendConstants[] = { 1,1,1,1 };
+			vkCmdSetBlendConstants(GetCommandList(cmd), blendConstants);
+		}
 
 		prev_pipeline_hash[cmd] = 0;
 		active_pso[cmd] = nullptr;
@@ -5872,73 +5871,111 @@ using namespace Vulkan_Internal;
 		active_renderpass[cmd] = VK_NULL_HANDLE;
 		dirty_pso[cmd] = false;
 		prev_shadingrate[cmd] = SHADING_RATE_INVALID;
+		pushconstants[cmd] = {};
+		vb_hash[cmd] = 0;
+		for (int i = 0; i < arraysize(vb_strides[cmd]); ++i)
+		{
+			vb_strides[cmd][i] = 0;
+		}
+		prev_swapchains[cmd].clear();
 
 		return cmd;
 	}
 	void GraphicsDevice_Vulkan::SubmitCommandLists()
 	{
-		auto& frame = GetFrameResources();
+		transitionLocker.lock();
+		VkResult res;
 
-		// Sync up copy queue and transitions:
-		copyQueueLock.lock();
-		if (copyQueueUse)
+		// Submit current frame:
 		{
-			// Copies:
-			{
-				VkResult res = vkEndCommandBuffer(frame.copyCommandBuffer);
-				assert(res == VK_SUCCESS);
+			auto& frame = GetFrameResources();
 
-				VkSemaphore semaphores[] = { copySemaphore };
-
-				VkSubmitInfo submitInfo = {};
-				submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-				submitInfo.commandBufferCount = 1;
-				submitInfo.pCommandBuffers = &frame.copyCommandBuffer;
-				submitInfo.pSignalSemaphores = semaphores;
-				submitInfo.signalSemaphoreCount = arraysize(semaphores);
-
-				res = vkQueueSubmit(copyQueue, 1, &submitInfo, VK_NULL_HANDLE);
-				assert(res == VK_SUCCESS);
-
-			}
-		}
-
-		// Execute deferred command lists:
-		{
-
-			VkCommandBuffer cmdLists[COMMANDLIST_COUNT];
-			uint32_t counter = 0;
+			QUEUE_TYPE submit_queue = QUEUE_COUNT;
 
 			// Transitions:
+			bool submit_transitions = false;
+			if(!transitions.empty())
 			{
-				for (auto& barrier : frame.loadedimagetransitions)
-				{
-					vkCmdPipelineBarrier(
-						frame.transitionCommandBuffer,
-						VK_PIPELINE_STAGE_TRANSFER_BIT,
-						VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-						0,
-						0, nullptr,
-						0, nullptr,
-						1, &barrier
-					);
-				}
-				frame.loadedimagetransitions.clear();
+				vkCmdPipelineBarrier(
+					frame.transitionCommandBuffer,
+					VK_PIPELINE_STAGE_TRANSFER_BIT,
+					VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+					0,
+					0, nullptr,
+					0, nullptr,
+					(uint32_t)transitions.size(),
+					transitions.data()
+				);
+				transitions.clear();
 
-				VkResult res = vkEndCommandBuffer(frame.transitionCommandBuffer);
+				res = vkEndCommandBuffer(frame.transitionCommandBuffer);
 				assert(res == VK_SUCCESS);
 
-				cmdLists[counter++] = frame.transitionCommandBuffer;
+				submit_transitions = true;
 			}
+
+			uint64_t copy_sync = copyAllocator.flush();
 
 			CommandList cmd_last = cmd_count.load();
 			cmd_count.store(0);
 			for (CommandList cmd = 0; cmd < cmd_last; ++cmd)
 			{
-				VkResult res = vkEndCommandBuffer(GetDirectCommandList(cmd));
+				barrier_flush(cmd);
+
+				res = vkEndCommandBuffer(GetCommandList(cmd));
 				assert(res == VK_SUCCESS);
 
-				cmdLists[counter++] = GetDirectCommandList(cmd);
+				const CommandListMetadata& meta = cmd_meta[cmd];
+				if (submit_queue == QUEUE_COUNT) // start first batch
+				{
+					submit_queue = meta.queue;
+				}
+				if (submit_queue != meta.queue || !meta.waits.empty()) // new queue type or wait breaks submit batch
+				{
+					// New batch signals its last cmd:
+					queues[submit_queue].submit_signalSemaphores.push_back(queues[submit_queue].semaphore);
+					queues[submit_queue].submit_signalValues.push_back(FRAMECOUNT * COMMANDLIST_COUNT + (uint64_t)cmd);
+					queues[submit_queue].submit(VK_NULL_HANDLE);
+					submit_queue = meta.queue;
+
+					for (auto& wait : meta.waits)
+					{
+						// record wait for signal on a previous submit:
+						const CommandListMetadata& wait_meta = cmd_meta[wait];
+						queues[submit_queue].submit_waitStages.push_back(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+						queues[submit_queue].submit_waitSemaphores.push_back(queues[wait_meta.queue].semaphore);
+						queues[submit_queue].submit_waitValues.push_back(FRAMECOUNT * COMMANDLIST_COUNT + (uint64_t)wait);
+					}
+				}
+
+				if (copy_sync > 0)
+				{
+					queues[submit_queue].submit_waitStages.push_back(VK_PIPELINE_STAGE_TRANSFER_BIT);
+					queues[submit_queue].submit_waitSemaphores.push_back(copyAllocator.semaphore);
+					queues[submit_queue].submit_waitValues.push_back(copy_sync);
+					copy_sync = 0;
+				}
+
+				if (submit_transitions)
+				{
+					queues[submit_queue].submit_cmds.push_back(frame.transitionCommandBuffer);
+					submit_transitions = false;
+				}
+
+				for (auto& swapchain : prev_swapchains[cmd])
+				{
+					auto internal_state = to_internal(swapchain);
+
+					queues[submit_queue].submit_swapchains.push_back(internal_state->swapChain);
+					queues[submit_queue].submit_swapChainImageIndices.push_back(internal_state->swapChainImageIndex);
+					queues[submit_queue].submit_waitStages.push_back(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+					queues[submit_queue].submit_waitSemaphores.push_back(internal_state->swapchainAcquireSemaphore);
+					queues[submit_queue].submit_waitValues.push_back(0); // not a timeline semaphore
+					queues[submit_queue].submit_signalSemaphores.push_back(internal_state->swapchainReleaseSemaphore);
+					queues[submit_queue].submit_signalValues.push_back(0); // not a timeline semaphore
+				}
+
+				queues[submit_queue].submit_cmds.push_back(GetCommandList(cmd));
 
 				for (auto& x : pipelines_worker[cmd])
 				{
@@ -5956,67 +5993,53 @@ using namespace Vulkan_Internal;
 				pipelines_worker[cmd].clear();
 			}
 
-			VkSubmitInfo submitInfo = {};
-			submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-
-			VkSemaphore waitSemaphores[] = { frame.swapchainAcquireSemaphore, copySemaphore };
-			VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT };
-			if (copyQueueUse)
+			// final submits with fences:
+			for (int queue = 0; queue < QUEUE_COUNT; ++queue)
 			{
-				submitInfo.waitSemaphoreCount = 2;
+				queues[queue].submit(frame.fence[queue]);
 			}
-			else
-			{
-				submitInfo.waitSemaphoreCount = 1;
-			}
-			submitInfo.pWaitSemaphores = waitSemaphores;
-			submitInfo.pWaitDstStageMask = waitStages;
-			submitInfo.commandBufferCount = counter;
-			submitInfo.pCommandBuffers = cmdLists;
-
-			submitInfo.signalSemaphoreCount = 1;
-			submitInfo.pSignalSemaphores = &frame.swapchainReleaseSemaphore;
-
-			VkResult res = vkQueueSubmit(graphicsQueue, 1, &submitInfo, frame.frameFence);
-			assert(res == VK_SUCCESS);
 		}
 
-		// This acts as a barrier, following this we will be using the next frame's resources when calling GetFrameResources()!
+		// From here, we begin a new frame, this affects GetFrameResources()!
 		FRAMECOUNT++;
 
-		// Initiate stalling CPU when GPU is behind by more frames than would fit in the backbuffers:
-		if (FRAMECOUNT >= BACKBUFFER_COUNT)
-		{
-			VkResult res = vkWaitForFences(device, 1, &GetFrameResources().frameFence, true, 0xFFFFFFFFFFFFFFFF);
-			assert(res == VK_SUCCESS);
-
-			res = vkResetFences(device, 1, &GetFrameResources().frameFence);
-			assert(res == VK_SUCCESS);
-		}
-
-		allocationhandler->Update(FRAMECOUNT, BACKBUFFER_COUNT);
-
-		// Restart transition command buffers:
+		// Begin next frame:
 		{
 			auto& frame = GetFrameResources();
 
-			VkResult res = vkResetCommandPool(device, frame.transitionCommandPool, 0);
-			assert(res == VK_SUCCESS);
+			// Initiate stalling CPU when GPU is not yet finished with next frame:
+			if (FRAMECOUNT >= BUFFERCOUNT)
+			{
+				for (int queue = 0; queue < QUEUE_COUNT; ++queue)
+				{
+					res = vkWaitForFences(device, 1, &frame.fence[queue], true, 0xFFFFFFFFFFFFFFFF);
+					assert(res == VK_SUCCESS);
 
-			VkCommandBufferBeginInfo beginInfo = {};
-			beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-			beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-			beginInfo.pInheritanceInfo = nullptr; // Optional
+					res = vkResetFences(device, 1, &frame.fence[queue]);
+					assert(res == VK_SUCCESS);
+				}
+			}
 
-			res = vkBeginCommandBuffer(frame.transitionCommandBuffer, &beginInfo);
-			assert(res == VK_SUCCESS);
+			allocationhandler->Update(FRAMECOUNT, BUFFERCOUNT);
+
+			// Restart transition command buffers:
+			{
+				res = vkResetCommandPool(device, frame.transitionCommandPool, 0);
+				assert(res == VK_SUCCESS);
+
+				VkCommandBufferBeginInfo beginInfo = {};
+				beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+				beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+				beginInfo.pInheritanceInfo = nullptr; // Optional
+
+				res = vkBeginCommandBuffer(frame.transitionCommandBuffer, &beginInfo);
+				assert(res == VK_SUCCESS);
+			}
 		}
-
-		copyQueueUse = false;
-		copyQueueLock.unlock();
+		transitionLocker.unlock();
 	}
 
-	void GraphicsDevice_Vulkan::WaitForGPU()
+	void GraphicsDevice_Vulkan::WaitForGPU() const
 	{
 		VkResult res = vkQueueWaitIdle(graphicsQueue);
 		assert(res == VK_SUCCESS);
@@ -6051,46 +6074,117 @@ using namespace Vulkan_Internal;
 		allocationhandler->destroylocker.unlock();
 	}
 
+	Texture GraphicsDevice_Vulkan::GetBackBuffer(const SwapChain* swapchain) const
+	{
+		auto swapchain_internal = to_internal(swapchain);
 
+		auto internal_state = std::make_shared<Texture_Vulkan>();
+		internal_state->resource = swapchain_internal->swapChainImages[swapchain_internal->swapChainImageIndex];
+
+		Texture result;
+		result.type = GPUResource::GPU_RESOURCE_TYPE::TEXTURE;
+		result.internal_state = internal_state;
+		result.desc.type = TextureDesc::TEXTURE_2D;
+		result.desc.Width = swapchain_internal->swapChainExtent.width;
+		result.desc.Height = swapchain_internal->swapChainExtent.height;
+		result.desc.Format = swapchain->desc.format;
+		return result;
+	}
+
+
+	void GraphicsDevice_Vulkan::WaitCommandList(CommandList cmd, CommandList wait_for)
+	{
+		CommandListMetadata& wait_meta = cmd_meta[wait_for];
+		assert(wait_for < cmd); // command list cannot wait for future command list!
+		cmd_meta[cmd].waits.push_back(wait_for);
+	}
+	void GraphicsDevice_Vulkan::RenderPassBegin(const SwapChain* swapchain, CommandList cmd)
+	{
+		auto internal_state = to_internal(swapchain);
+		active_renderpass[cmd] = &internal_state->renderpass;
+		prev_swapchains[cmd].push_back(swapchain);
+
+		VkResult res = vkAcquireNextImageKHR(
+			device,
+			internal_state->swapChain,
+			0xFFFFFFFFFFFFFFFF,
+			internal_state->swapchainAcquireSemaphore,
+			VK_NULL_HANDLE,
+			&internal_state->swapChainImageIndex
+		);
+		assert(res == VK_SUCCESS);
+		//if (res != VK_SUCCESS)
+		//{
+		//	// Handle outdated error in acquire.
+		//	if (res == VK_SUBOPTIMAL_KHR || res == VK_ERROR_OUT_OF_DATE_KHR)
+		//	{
+		//		CreateBackBufferResources();
+		//		PresentBegin(cmd);
+		//		return;
+		//	}
+		//}
+		barrier_flush(cmd);
+		
+		VkClearValue clearColor = {
+			swapchain->desc.clearcolor[0],
+			swapchain->desc.clearcolor[1],
+			swapchain->desc.clearcolor[2],
+			swapchain->desc.clearcolor[3],
+		};
+		VkRenderPassBeginInfo renderPassInfo = {};
+		renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+		renderPassInfo.renderPass = to_internal(&internal_state->renderpass)->renderpass;
+		renderPassInfo.framebuffer = internal_state->swapChainFramebuffers[internal_state->swapChainImageIndex];
+		renderPassInfo.renderArea.offset = { 0, 0 };
+		renderPassInfo.renderArea.extent = internal_state->swapChainExtent;
+		renderPassInfo.clearValueCount = 1;
+		renderPassInfo.pClearValues = &clearColor;
+		vkCmdBeginRenderPass(GetCommandList(cmd), &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+		
+	}
 	void GraphicsDevice_Vulkan::RenderPassBegin(const RenderPass* renderpass, CommandList cmd)
 	{
+		barrier_flush(cmd);
+
 		active_renderpass[cmd] = renderpass;
 
 		auto internal_state = to_internal(renderpass);
-		vkCmdBeginRenderPass(GetDirectCommandList(cmd), &internal_state->beginInfo, VK_SUBPASS_CONTENTS_INLINE);
+		vkCmdBeginRenderPass(GetCommandList(cmd), &internal_state->beginInfo, VK_SUBPASS_CONTENTS_INLINE);
 	}
 	void GraphicsDevice_Vulkan::RenderPassEnd(CommandList cmd)
 	{
-		vkCmdEndRenderPass(GetDirectCommandList(cmd));
+		vkCmdEndRenderPass(GetCommandList(cmd));
 
 		active_renderpass[cmd] = VK_NULL_HANDLE;
 	}
-	void GraphicsDevice_Vulkan::BindScissorRects(uint32_t numRects, const Rect* rects, CommandList cmd) {
+	void GraphicsDevice_Vulkan::BindScissorRects(uint32_t numRects, const Rect* rects, CommandList cmd)
+	{
 		assert(rects != nullptr);
-		assert(numRects <= 8);
-		VkRect2D scissors[8];
+		assert(numRects <= 16);
+		VkRect2D scissors[16];
 		for(uint32_t i = 0; i < numRects; ++i) {
 			scissors[i].extent.width = abs(rects[i].right - rects[i].left);
 			scissors[i].extent.height = abs(rects[i].top - rects[i].bottom);
 			scissors[i].offset.x = std::max(0, rects[i].left);
 			scissors[i].offset.y = std::max(0, rects[i].top);
 		}
-		vkCmdSetScissor(GetDirectCommandList(cmd), 0, numRects, scissors);
+		vkCmdSetScissor(GetCommandList(cmd), 0, numRects, scissors);
 	}
 	void GraphicsDevice_Vulkan::BindViewports(uint32_t NumViewports, const Viewport* pViewports, CommandList cmd)
 	{
-		assert(NumViewports <= 6);
-		VkViewport viewports[6];
+		assert(pViewports != nullptr);
+		assert(NumViewports <= 16);
+		VkViewport vp[16];
 		for (uint32_t i = 0; i < NumViewports; ++i)
 		{
-			viewports[i].x = pViewports[i].TopLeftX;
-			viewports[i].y = pViewports[i].TopLeftY + pViewports[i].Height;
-			viewports[i].width = pViewports[i].Width;
-			viewports[i].height = -pViewports[i].Height;
-			viewports[i].minDepth = pViewports[i].MinDepth;
-			viewports[i].maxDepth = pViewports[i].MaxDepth;
+			vp[i].x = pViewports[i].TopLeftX;
+			vp[i].y = pViewports[i].TopLeftY + pViewports[i].Height;
+			vp[i].width = pViewports[i].Width;
+			vp[i].height = -pViewports[i].Height;
+			vp[i].minDepth = pViewports[i].MinDepth;
+			vp[i].maxDepth = pViewports[i].MaxDepth;
 		}
-		vkCmdSetViewport(GetDirectCommandList(cmd), 0, NumViewports, viewports);
+		vkCmdSetViewport(GetCommandList(cmd), 0, NumViewports, vp);
 	}
 	void GraphicsDevice_Vulkan::BindResource(SHADERSTAGE stage, const GPUResource* resource, uint32_t slot, CommandList cmd, int subresource)
 	{
@@ -6162,11 +6256,16 @@ using namespace Vulkan_Internal;
 	}
 	void GraphicsDevice_Vulkan::BindVertexBuffers(const GPUBuffer *const* vertexBuffers, uint32_t slot, uint32_t count, const uint32_t* strides, const uint32_t* offsets, CommandList cmd)
 	{
+		size_t hash = 0;
+
 		VkDeviceSize voffsets[8] = {};
 		VkBuffer vbuffers[8] = {};
 		assert(count <= 8);
 		for (uint32_t i = 0; i < count; ++i)
 		{
+			wiHelper::hash_combine(hash, strides[i]);
+			vb_strides[cmd][i] = strides[i];
+
 			if (vertexBuffers[i] == nullptr || !vertexBuffers[i]->IsValid())
 			{
 				vbuffers[i] = nullBuffer;
@@ -6181,25 +6280,35 @@ using namespace Vulkan_Internal;
 				}
 			}
 		}
+		for (int i = count; i < arraysize(vb_strides[cmd]); ++i)
+		{
+			vb_strides[cmd][i] = 0;
+		}
 
-		vkCmdBindVertexBuffers(GetDirectCommandList(cmd), static_cast<uint32_t>(slot), static_cast<uint32_t>(count), vbuffers, voffsets);
+		vkCmdBindVertexBuffers(GetCommandList(cmd), static_cast<uint32_t>(slot), static_cast<uint32_t>(count), vbuffers, voffsets);
+
+		if (hash != vb_hash[cmd])
+		{
+			vb_hash[cmd] = hash;
+			dirty_pso[cmd] = true;
+		}
 	}
 	void GraphicsDevice_Vulkan::BindIndexBuffer(const GPUBuffer* indexBuffer, const INDEXBUFFER_FORMAT format, uint32_t offset, CommandList cmd)
 	{
 		if (indexBuffer != nullptr)
 		{
 			auto internal_state = to_internal(indexBuffer);
-			vkCmdBindIndexBuffer(GetDirectCommandList(cmd), internal_state->resource, (VkDeviceSize)offset, format == INDEXFORMAT_16BIT ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32);
+			vkCmdBindIndexBuffer(GetCommandList(cmd), internal_state->resource, (VkDeviceSize)offset, format == INDEXFORMAT_16BIT ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32);
 		}
 	}
 	void GraphicsDevice_Vulkan::BindStencilRef(uint32_t value, CommandList cmd)
 	{
-		vkCmdSetStencilReference(GetDirectCommandList(cmd), VK_STENCIL_FRONT_AND_BACK, value);
+		vkCmdSetStencilReference(GetCommandList(cmd), VK_STENCIL_FRONT_AND_BACK, value);
 	}
 	void GraphicsDevice_Vulkan::BindBlendFactor(float r, float g, float b, float a, CommandList cmd)
 	{
 		float blendConstants[] = { r, g, b, a };
-		vkCmdSetBlendConstants(GetDirectCommandList(cmd), blendConstants);
+		vkCmdSetBlendConstants(GetCommandList(cmd), blendConstants);
 	}
 	void GraphicsDevice_Vulkan::BindShadingRate(SHADING_RATE rate, CommandList cmd)
 	{
@@ -6271,7 +6380,7 @@ using namespace Vulkan_Internal;
 			}
 
 			vkCmdSetFragmentShadingRateKHR(
-				GetDirectCommandList(cmd),
+				GetCommandList(cmd),
 				&fragmentSize,
 				combiner
 			);
@@ -6291,13 +6400,14 @@ using namespace Vulkan_Internal;
 		}
 		prev_pipeline_hash[cmd] = pipeline_hash;
 
+		auto internal_state = to_internal(pso);
+
 		if (active_pso[cmd] == nullptr)
 		{
 			GetFrameResources().descriptors[cmd].dirty = true;
 		}
 		else
 		{
-			auto internal_state = to_internal(pso);
 			auto active_internal = to_internal(active_pso[cmd]);
 			if (internal_state->binding_hash != active_internal->binding_hash)
 			{
@@ -6305,12 +6415,26 @@ using namespace Vulkan_Internal;
 			}
 		}
 
+		if (!internal_state->bindlessSets.empty())
+		{
+			vkCmdBindDescriptorSets(
+				GetCommandList(cmd),
+				VK_PIPELINE_BIND_POINT_GRAPHICS,
+				internal_state->pipelineLayout,
+				internal_state->bindlessFirstSet,
+				(uint32_t)internal_state->bindlessSets.size(),
+				internal_state->bindlessSets.data(),
+				0,
+				nullptr
+			);
+		}
+
 		active_pso[cmd] = pso;
 		dirty_pso[cmd] = true;
 	}
 	void GraphicsDevice_Vulkan::BindComputeShader(const Shader* cs, CommandList cmd)
 	{
-		assert(cs->stage == CS);
+		assert(cs->stage == CS || cs->stage == LIB);
 		if (active_cs[cmd] != cs)
 		{
 			if (active_cs[cmd] == nullptr)
@@ -6329,65 +6453,101 @@ using namespace Vulkan_Internal;
 
 			active_cs[cmd] = cs;
 			auto internal_state = to_internal(cs);
-			vkCmdBindPipeline(GetDirectCommandList(cmd), VK_PIPELINE_BIND_POINT_COMPUTE, internal_state->pipeline_cs);
+
+			if (cs->stage == CS)
+			{
+				vkCmdBindPipeline(GetCommandList(cmd), VK_PIPELINE_BIND_POINT_COMPUTE, internal_state->pipeline_cs);
+
+				if (!internal_state->bindlessSets.empty())
+				{
+					vkCmdBindDescriptorSets(
+						GetCommandList(cmd),
+						VK_PIPELINE_BIND_POINT_COMPUTE,
+						internal_state->pipelineLayout_cs,
+						internal_state->bindlessFirstSet,
+						(uint32_t)internal_state->bindlessSets.size(),
+						internal_state->bindlessSets.data(),
+						0,
+						nullptr
+					);
+				}
+			}
+			else if (cs->stage == LIB)
+			{
+				if (!internal_state->bindlessSets.empty())
+				{
+					vkCmdBindDescriptorSets(
+						GetCommandList(cmd),
+						VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
+						internal_state->pipelineLayout_cs,
+						internal_state->bindlessFirstSet,
+						(uint32_t)internal_state->bindlessSets.size(),
+						internal_state->bindlessSets.data(),
+						0,
+						nullptr
+					);
+				}
+			}
 		}
 	}
 	void GraphicsDevice_Vulkan::Draw(uint32_t vertexCount, uint32_t startVertexLocation, CommandList cmd)
 	{
 		predraw(cmd);
-		vkCmdDraw(GetDirectCommandList(cmd), static_cast<uint32_t>(vertexCount), 1, startVertexLocation, 0);
+		vkCmdDraw(GetCommandList(cmd), static_cast<uint32_t>(vertexCount), 1, startVertexLocation, 0);
 	}
 	void GraphicsDevice_Vulkan::DrawIndexed(uint32_t indexCount, uint32_t startIndexLocation, uint32_t baseVertexLocation, CommandList cmd)
 	{
 		predraw(cmd);
-		vkCmdDrawIndexed(GetDirectCommandList(cmd), static_cast<uint32_t>(indexCount), 1, startIndexLocation, baseVertexLocation, 0);
+		vkCmdDrawIndexed(GetCommandList(cmd), static_cast<uint32_t>(indexCount), 1, startIndexLocation, baseVertexLocation, 0);
 	}
 	void GraphicsDevice_Vulkan::DrawInstanced(uint32_t vertexCount, uint32_t instanceCount, uint32_t startVertexLocation, uint32_t startInstanceLocation, CommandList cmd)
 	{
 		predraw(cmd);
-		vkCmdDraw(GetDirectCommandList(cmd), static_cast<uint32_t>(vertexCount), static_cast<uint32_t>(instanceCount), startVertexLocation, startInstanceLocation);
+		vkCmdDraw(GetCommandList(cmd), static_cast<uint32_t>(vertexCount), static_cast<uint32_t>(instanceCount), startVertexLocation, startInstanceLocation);
 	}
 	void GraphicsDevice_Vulkan::DrawIndexedInstanced(uint32_t indexCount, uint32_t instanceCount, uint32_t startIndexLocation, uint32_t baseVertexLocation, uint32_t startInstanceLocation, CommandList cmd)
 	{
 		predraw(cmd);
-		vkCmdDrawIndexed(GetDirectCommandList(cmd), static_cast<uint32_t>(indexCount), static_cast<uint32_t>(instanceCount), startIndexLocation, baseVertexLocation, startInstanceLocation);
+		vkCmdDrawIndexed(GetCommandList(cmd), static_cast<uint32_t>(indexCount), static_cast<uint32_t>(instanceCount), startIndexLocation, baseVertexLocation, startInstanceLocation);
 	}
 	void GraphicsDevice_Vulkan::DrawInstancedIndirect(const GPUBuffer* args, uint32_t args_offset, CommandList cmd)
 	{
 		predraw(cmd);
 		auto internal_state = to_internal(args);
-		vkCmdDrawIndirect(GetDirectCommandList(cmd), internal_state->resource, (VkDeviceSize)args_offset, 1, (uint32_t)sizeof(IndirectDrawArgsInstanced));
+		vkCmdDrawIndirect(GetCommandList(cmd), internal_state->resource, (VkDeviceSize)args_offset, 1, (uint32_t)sizeof(IndirectDrawArgsInstanced));
 	}
 	void GraphicsDevice_Vulkan::DrawIndexedInstancedIndirect(const GPUBuffer* args, uint32_t args_offset, CommandList cmd)
 	{
 		predraw(cmd);
 		auto internal_state = to_internal(args);
-		vkCmdDrawIndexedIndirect(GetDirectCommandList(cmd), internal_state->resource, (VkDeviceSize)args_offset, 1, (uint32_t)sizeof(IndirectDrawArgsIndexedInstanced));
+		vkCmdDrawIndexedIndirect(GetCommandList(cmd), internal_state->resource, (VkDeviceSize)args_offset, 1, (uint32_t)sizeof(IndirectDrawArgsIndexedInstanced));
 	}
 	void GraphicsDevice_Vulkan::Dispatch(uint32_t threadGroupCountX, uint32_t threadGroupCountY, uint32_t threadGroupCountZ, CommandList cmd)
 	{
 		predispatch(cmd);
-		vkCmdDispatch(GetDirectCommandList(cmd), threadGroupCountX, threadGroupCountY, threadGroupCountZ);
+		vkCmdDispatch(GetCommandList(cmd), threadGroupCountX, threadGroupCountY, threadGroupCountZ);
 	}
 	void GraphicsDevice_Vulkan::DispatchIndirect(const GPUBuffer* args, uint32_t args_offset, CommandList cmd)
 	{
 		predispatch(cmd);
 		auto internal_state = to_internal(args);
-		vkCmdDispatchIndirect(GetDirectCommandList(cmd), internal_state->resource, (VkDeviceSize)args_offset);
+		vkCmdDispatchIndirect(GetCommandList(cmd), internal_state->resource, (VkDeviceSize)args_offset);
 	}
 	void GraphicsDevice_Vulkan::DispatchMesh(uint32_t threadGroupCountX, uint32_t threadGroupCountY, uint32_t threadGroupCountZ, CommandList cmd)
 	{
 		predraw(cmd);
-		vkCmdDrawMeshTasksNV(GetDirectCommandList(cmd), threadGroupCountX * threadGroupCountY * threadGroupCountZ, 0);
+		vkCmdDrawMeshTasksNV(GetCommandList(cmd), threadGroupCountX * threadGroupCountY * threadGroupCountZ, 0);
 	}
 	void GraphicsDevice_Vulkan::DispatchMeshIndirect(const GPUBuffer* args, uint32_t args_offset, CommandList cmd)
 	{
 		predraw(cmd);
 		auto internal_state = to_internal(args);
-		vkCmdDrawMeshTasksIndirectNV(GetDirectCommandList(cmd), internal_state->resource, (VkDeviceSize)args_offset,1,sizeof(IndirectDispatchArgs));
+		vkCmdDrawMeshTasksIndirectNV(GetCommandList(cmd), internal_state->resource, (VkDeviceSize)args_offset,1,sizeof(IndirectDispatchArgs));
 	}
 	void GraphicsDevice_Vulkan::CopyResource(const GPUResource* pDst, const GPUResource* pSrc, CommandList cmd)
 	{
+		barrier_flush(cmd);
+
 		if (pDst->type == GPUResource::GPU_RESOURCE_TYPE::TEXTURE && pSrc->type == GPUResource::GPU_RESOURCE_TYPE::TEXTURE)
 		{
 			auto internal_state_src = to_internal((const Texture*)pSrc);
@@ -6406,7 +6566,7 @@ using namespace Vulkan_Internal;
 				copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
 				copy.imageSubresource.layerCount = 1;
 				vkCmdCopyBufferToImage(
-					GetDirectCommandList(cmd),
+					GetCommandList(cmd),
 					internal_state_src->staging_resource,
 					internal_state_dst->resource,
 					VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -6424,7 +6584,7 @@ using namespace Vulkan_Internal;
 				copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
 				copy.imageSubresource.layerCount = 1;
 				vkCmdCopyImageToBuffer(
-					GetDirectCommandList(cmd),
+					GetCommandList(cmd),
 					internal_state_src->resource,
 					VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 					internal_state_dst->staging_resource,
@@ -6479,7 +6639,7 @@ using namespace Vulkan_Internal;
 				copy.dstSubresource.layerCount = dst_desc.ArraySize;
 				copy.dstSubresource.mipLevel = 0;
 
-				vkCmdCopyImage(GetDirectCommandList(cmd),
+				vkCmdCopyImage(GetCommandList(cmd),
 					internal_state_src->resource, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 					internal_state_dst->resource, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 					1, &copy
@@ -6499,7 +6659,7 @@ using namespace Vulkan_Internal;
 			copy.dstOffset = 0;
 			copy.size = (VkDeviceSize)std::min(src_desc.ByteWidth, dst_desc.ByteWidth);
 
-			vkCmdCopyBuffer(GetDirectCommandList(cmd),
+			vkCmdCopyBuffer(GetCommandList(cmd),
 				internal_state_src->resource,
 				internal_state_dst->resource,
 				1, &copy
@@ -6515,153 +6675,118 @@ using namespace Vulkan_Internal;
 		{
 			return;
 		}
-		auto internal_state = to_internal(buffer);
 
 		dataSize = std::min((int)buffer->desc.ByteWidth, dataSize);
 		dataSize = (dataSize >= 0 ? dataSize : buffer->desc.ByteWidth);
 
+		auto internal_state_dst = to_internal(buffer);
+
+		GPUAllocation allocation = AllocateGPU(dataSize, cmd);
+		memcpy(allocation.data, data, dataSize);
 
 		if (buffer->desc.Usage == USAGE_DYNAMIC && buffer->desc.BindFlags & BIND_CONSTANT_BUFFER)
 		{
 			// Dynamic buffer will be used from host memory directly:
-			GPUAllocation allocation = AllocateGPU(dataSize, cmd);
-			memcpy(allocation.data, data, dataSize);
-			internal_state->dynamic[cmd] = allocation;
+			internal_state_dst->dynamic[cmd] = allocation;
 			GetFrameResources().descriptors[cmd].dirty = true;
 		}
 		else
 		{
 			// Contents will be transferred to device memory:
-
-			// barrier to transfer:
-
 			assert(active_renderpass[cmd] == nullptr); // must not be inside render pass
 
-			VkPipelineStageFlags stages = 0;
+			auto internal_state_src = to_internal(&GetFrameResources().resourceBuffer[cmd].buffer);
 
 			VkBufferMemoryBarrier barrier = {};
 			barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-			barrier.buffer = internal_state->resource;
+			barrier.buffer = internal_state_dst->resource;
 			barrier.srcAccessMask = 0;
 			if (buffer->desc.BindFlags & BIND_CONSTANT_BUFFER)
 			{
 				barrier.srcAccessMask |= VK_ACCESS_UNIFORM_READ_BIT;
-				stages = VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
 			}
 			if (buffer->desc.BindFlags & BIND_VERTEX_BUFFER)
 			{
 				barrier.srcAccessMask |= VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
-				stages |= VK_PIPELINE_STAGE_VERTEX_INPUT_BIT;
 			}
 			if (buffer->desc.BindFlags & BIND_INDEX_BUFFER)
 			{
 				barrier.srcAccessMask |= VK_ACCESS_INDEX_READ_BIT;
-				stages |= VK_PIPELINE_STAGE_VERTEX_INPUT_BIT;
 			}
 			if (buffer->desc.BindFlags & BIND_SHADER_RESOURCE)
 			{
 				barrier.srcAccessMask |= VK_ACCESS_SHADER_READ_BIT;
-				stages = VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
 			}
 			if (buffer->desc.BindFlags & BIND_UNORDERED_ACCESS)
 			{
 				barrier.srcAccessMask |= VK_ACCESS_SHADER_WRITE_BIT;
-				stages = VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
 			}
 			if (buffer->desc.MiscFlags & RESOURCE_MISC_RAY_TRACING)
 			{
 				barrier.srcAccessMask |= VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-				stages = VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
 			}
 			barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
 			barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 			barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 			barrier.size = VK_WHOLE_SIZE;
 
-			vkCmdPipelineBarrier(
-				GetDirectCommandList(cmd),
-				stages,
-				VK_PIPELINE_STAGE_TRANSFER_BIT,
-				0,
-				0, nullptr,
-				1, &barrier,
-				0, nullptr
-			);
-
-
-			// issue data copy:
-			uint8_t* dest = GetFrameResources().resourceBuffer[cmd].allocate(dataSize, 1);
-			memcpy(dest, data, dataSize);
+			frame_bufferBarriers[cmd].push_back(barrier);
+			barrier_flush(cmd);
 
 			VkBufferCopy copyRegion = {};
 			copyRegion.size = dataSize;
-			copyRegion.srcOffset = GetFrameResources().resourceBuffer[cmd].calculateOffset(dest);
+			copyRegion.srcOffset = (VkDeviceSize)allocation.offset;
 			copyRegion.dstOffset = 0;
 
-			vkCmdCopyBuffer(GetDirectCommandList(cmd), 
-				std::static_pointer_cast<Buffer_Vulkan>(GetFrameResources().resourceBuffer[cmd].buffer.internal_state)->resource,
-				internal_state->resource, 1, &copyRegion);
-
-
+			vkCmdCopyBuffer(
+				GetCommandList(cmd),
+				internal_state_src->resource,
+				internal_state_dst->resource,
+				1,
+				&copyRegion
+			);
 
 			// reverse barrier:
 			std::swap(barrier.srcAccessMask, barrier.dstAccessMask);
-
-			vkCmdPipelineBarrier(
-				GetDirectCommandList(cmd),
-				VK_PIPELINE_STAGE_TRANSFER_BIT,
-				stages,
-				0,
-				0, nullptr,
-				1, &barrier,
-				0, nullptr
-			);
+			frame_bufferBarriers[cmd].push_back(barrier);
 
 		}
 
 	}
-	void GraphicsDevice_Vulkan::QueryBegin(const GPUQuery *query, CommandList cmd)
+	void GraphicsDevice_Vulkan::QueryBegin(const GPUQueryHeap* heap, uint32_t index, CommandList cmd)
 	{
-		auto internal_state = to_internal(query);
+		auto internal_state = to_internal(heap);
 
-		switch (internal_state->query_type)
+		switch (heap->desc.type)
 		{
-		case GPU_QUERY_TYPE_OCCLUSION_PREDICATE:
-			vkResetQueryPool(device, allocationhandler->queries_occlusion.blocks[internal_state->query.block], (uint32_t)internal_state->query.index, 1);
-			vkCmdBeginQuery(GetDirectCommandList(cmd), allocationhandler->queries_occlusion.blocks[internal_state->query.block], (uint32_t)internal_state->query.index, 0);
+		case GPU_QUERY_TYPE_OCCLUSION_BINARY:
+			vkCmdBeginQuery(GetCommandList(cmd), internal_state->pool, index, 0);
 			break;
 		case GPU_QUERY_TYPE_OCCLUSION:
-			vkResetQueryPool(device, allocationhandler->queries_occlusion.blocks[internal_state->query.block], (uint32_t)internal_state->query.index, 1);
-			vkCmdBeginQuery(GetDirectCommandList(cmd), allocationhandler->queries_occlusion.blocks[internal_state->query.block], (uint32_t)internal_state->query.index, VK_QUERY_CONTROL_PRECISE_BIT);
+			vkCmdBeginQuery(GetCommandList(cmd), internal_state->pool, index, VK_QUERY_CONTROL_PRECISE_BIT);
 			break;
 		}
 	}
-	void GraphicsDevice_Vulkan::QueryEnd(const GPUQuery *query, CommandList cmd)
+	void GraphicsDevice_Vulkan::QueryEnd(const GPUQueryHeap* heap, uint32_t index, CommandList cmd)
 	{
-		auto internal_state = to_internal(query);
+		auto internal_state = to_internal(heap);
 
-		switch (internal_state->query_type)
+		switch (heap->desc.type)
 		{
 		case GPU_QUERY_TYPE_TIMESTAMP:
-			vkResetQueryPool(device, allocationhandler->queries_timestamp.blocks[internal_state->query.block], (uint32_t)internal_state->query.index, 1);
-			vkCmdWriteTimestamp(GetDirectCommandList(cmd), VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, allocationhandler->queries_timestamp.blocks[internal_state->query.block], internal_state->query.index);
+			vkCmdWriteTimestamp(GetCommandList(cmd), VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, internal_state->pool, index);
 			break;
-		case GPU_QUERY_TYPE_OCCLUSION_PREDICATE:
-			vkCmdEndQuery(GetDirectCommandList(cmd), allocationhandler->queries_occlusion.blocks[internal_state->query.block], internal_state->query.index);
-			break;
+		case GPU_QUERY_TYPE_OCCLUSION_BINARY:
 		case GPU_QUERY_TYPE_OCCLUSION:
-			vkCmdEndQuery(GetDirectCommandList(cmd), allocationhandler->queries_occlusion.blocks[internal_state->query.block], internal_state->query.index);
+			vkCmdEndQuery(GetCommandList(cmd), internal_state->pool, index);
 			break;
 		}
 	}
 	void GraphicsDevice_Vulkan::Barrier(const GPUBarrier* barriers, uint32_t numBarriers, CommandList cmd)
 	{
-		VkMemoryBarrier memorybarriers[8];
-		VkImageMemoryBarrier imagebarriers[8];
-		VkBufferMemoryBarrier bufferbarriers[8];
-		uint32_t memorybarrier_count = 0;
-		uint32_t imagebarrier_count = 0;
-		uint32_t bufferbarrier_count = 0;
+		auto& memoryBarriers = frame_memoryBarriers[cmd];
+		auto& imageBarriers = frame_imageBarriers[cmd];
+		auto& bufferBarriers = frame_bufferBarriers[cmd];
 
 		for (uint32_t i = 0; i < numBarriers; ++i)
 		{
@@ -6672,16 +6797,18 @@ using namespace Vulkan_Internal;
 			default:
 			case GPUBarrier::MEMORY_BARRIER:
 			{
-				VkMemoryBarrier& barrierdesc = memorybarriers[memorybarrier_count++];
+				VkMemoryBarrier barrierdesc = {};
 				barrierdesc.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
 				barrierdesc.pNext = nullptr;
 				barrierdesc.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT;
 				barrierdesc.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
-				if (CheckCapability(GRAPHICSDEVICE_CAPABILITY_RAYTRACING))
+				if (CheckCapability(GRAPHICSDEVICE_CAPABILITY_RAYTRACING_PIPELINE) || CheckCapability(GRAPHICSDEVICE_CAPABILITY_RAYTRACING_INLINE))
 				{
 					barrierdesc.srcAccessMask |= VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
 					barrierdesc.dstAccessMask |= VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
 				}
+
+				memoryBarriers.push_back(barrierdesc);
 			}
 			break;
 			case GPUBarrier::IMAGE_BARRIER:
@@ -6689,7 +6816,7 @@ using namespace Vulkan_Internal;
 				const TextureDesc& desc = barrier.image.texture->GetDesc();
 				auto internal_state = to_internal(barrier.image.texture);
 
-				VkImageMemoryBarrier& barrierdesc = imagebarriers[imagebarrier_count++];
+				VkImageMemoryBarrier barrierdesc = {};
 				barrierdesc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
 				barrierdesc.pNext = nullptr;
 				barrierdesc.image = internal_state->resource;
@@ -6709,19 +6836,52 @@ using namespace Vulkan_Internal;
 				{
 					barrierdesc.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
 				}
-				barrierdesc.subresourceRange.baseArrayLayer = 0;
-				barrierdesc.subresourceRange.layerCount = desc.ArraySize;
-				barrierdesc.subresourceRange.baseMipLevel = 0;
-				barrierdesc.subresourceRange.levelCount = desc.MipLevels;
+				if (barrier.image.mip >= 0 || barrier.image.slice >= 0)
+				{
+					barrierdesc.subresourceRange.baseMipLevel = (uint32_t)std::max(0, barrier.image.mip);
+					barrierdesc.subresourceRange.levelCount = 1;
+					barrierdesc.subresourceRange.baseArrayLayer = (uint32_t)std::max(0, barrier.image.slice);
+					barrierdesc.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS; // this should be 1 but cubemap array complains in debug layer...
+				}
+				else
+				{
+					barrierdesc.subresourceRange.baseMipLevel = 0;
+					barrierdesc.subresourceRange.levelCount = VK_REMAINING_MIP_LEVELS;
+					barrierdesc.subresourceRange.baseArrayLayer = 0;
+					barrierdesc.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
+				}
 				barrierdesc.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 				barrierdesc.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+
+				bool found = false;
+				for (auto& x : imageBarriers)
+				{
+					// Two duplicate barriers will be combined into one:
+					if (x.image == barrierdesc.image &&
+						x.subresourceRange.baseMipLevel == barrierdesc.subresourceRange.baseMipLevel &&
+						x.subresourceRange.levelCount == barrierdesc.subresourceRange.levelCount &&
+						x.subresourceRange.baseArrayLayer == barrierdesc.subresourceRange.baseArrayLayer &&
+						x.subresourceRange.layerCount == barrierdesc.subresourceRange.layerCount
+						)
+					{
+						found = true;
+						x.newLayout = barrierdesc.newLayout;
+						x.dstAccessMask |= barrierdesc.dstAccessMask;
+						break;
+					}
+				}
+
+				if (!found)
+				{
+					imageBarriers.push_back(barrierdesc);
+				}
 			}
 			break;
 			case GPUBarrier::BUFFER_BARRIER:
 			{
 				auto internal_state = to_internal(barrier.buffer.buffer);
 
-				VkBufferMemoryBarrier& barrierdesc = bufferbarriers[bufferbarrier_count++];
+				VkBufferMemoryBarrier barrierdesc = {};
 				barrierdesc.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
 				barrierdesc.pNext = nullptr;
 				barrierdesc.buffer = internal_state->resource;
@@ -6731,31 +6891,35 @@ using namespace Vulkan_Internal;
 				barrierdesc.dstAccessMask = _ParseBufferState(barrier.buffer.state_after);
 				barrierdesc.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 				barrierdesc.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+
+				bool found = false;
+				for (auto& x : bufferBarriers)
+				{
+					// Two duplicate barriers will be combined into one:
+					if (x.buffer == barrierdesc.buffer &&
+						x.srcAccessMask == barrierdesc.srcAccessMask &&
+						x.dstAccessMask == barrierdesc.dstAccessMask
+						)
+					{
+						found = true;
+						x.dstAccessMask |= barrierdesc.dstAccessMask;
+						break;
+					}
+				}
+
+				if (!found)
+				{
+					bufferBarriers.push_back(barrierdesc);
+				}
 			}
 			break;
 			}
 		}
-
-		VkPipelineStageFlags srcStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-		VkPipelineStageFlags dstStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-
-		if (CheckCapability(GRAPHICSDEVICE_CAPABILITY_RAYTRACING))
-		{
-			srcStage |= VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
-			dstStage |= VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
-		}
-
-		vkCmdPipelineBarrier(GetDirectCommandList(cmd),
-			srcStage,
-			dstStage,
-			0,
-			memorybarrier_count, memorybarriers,
-			bufferbarrier_count, bufferbarriers,
-			imagebarrier_count, imagebarriers
-		);
 	}
 	void GraphicsDevice_Vulkan::BuildRaytracingAccelerationStructure(const RaytracingAccelerationStructure* dst, CommandList cmd, const RaytracingAccelerationStructure* src)
 	{
+		barrier_flush(cmd);
+
 		auto dst_internal = to_internal(dst);
 
 		VkAccelerationStructureBuildGeometryInfoKHR info = dst_internal->buildInfo;
@@ -6850,7 +7014,7 @@ using namespace Vulkan_Internal;
 		VkAccelerationStructureBuildRangeInfoKHR* pRangeInfo = ranges.data();
 
 		vkCmdBuildAccelerationStructuresKHR(
-			GetDirectCommandList(cmd),
+			GetCommandList(cmd),
 			1,
 			&info,
 			&pRangeInfo
@@ -6859,21 +7023,21 @@ using namespace Vulkan_Internal;
 	void GraphicsDevice_Vulkan::BindRaytracingPipelineState(const RaytracingPipelineState* rtpso, CommandList cmd)
 	{
 		prev_pipeline_hash[cmd] = 0;
-		GetFrameResources().descriptors[cmd].dirty = true;
-		active_cs[cmd] = rtpso->desc.shaderlibraries.front().shader; // we just take the first shader (todo: better)
 		active_rt[cmd] = rtpso;
 
-		vkCmdBindPipeline(GetDirectCommandList(cmd), VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, to_internal(rtpso)->pipeline);
+		BindComputeShader(rtpso->desc.shaderlibraries.front().shader, cmd);
+
+		vkCmdBindPipeline(GetCommandList(cmd), VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, to_internal(rtpso)->pipeline);
 	}
 	void GraphicsDevice_Vulkan::DispatchRays(const DispatchRaysDesc* desc, CommandList cmd)
 	{
-		preraytrace(cmd);
+		predispatch(cmd);
 
 		VkStridedDeviceAddressRegionKHR raygen = {};
 		raygen.deviceAddress = desc->raygeneration.buffer ? to_internal(desc->raygeneration.buffer)->address : 0;
 		raygen.deviceAddress += desc->raygeneration.offset;
 		raygen.size = desc->raygeneration.size;
-		raygen.stride = desc->raygeneration.stride;
+		raygen.stride = raygen.size; // raygen specifically must be size == stride
 		
 		VkStridedDeviceAddressRegionKHR miss = {};
 		miss.deviceAddress = desc->miss.buffer ? to_internal(desc->miss.buffer)->address : 0;
@@ -6894,7 +7058,7 @@ using namespace Vulkan_Internal;
 		callable.stride = desc->callable.stride;
 
 		vkCmdTraceRaysKHR(
-			GetDirectCommandList(cmd),
+			GetCommandList(cmd),
 			&raygen,
 			&miss,
 			&hitgroup,
@@ -6904,129 +7068,10 @@ using namespace Vulkan_Internal;
 			desc->Depth
 		);
 	}
-
-	void GraphicsDevice_Vulkan::BindDescriptorTable(BINDPOINT bindpoint, uint32_t space, const DescriptorTable* table, CommandList cmd)
+	void GraphicsDevice_Vulkan::PushConstants(const void* data, uint32_t size, CommandList cmd)
 	{
-		const RootSignature* rootsig = nullptr;
-		switch (bindpoint)
-		{
-		default:
-		case wiGraphics::GRAPHICS:
-			rootsig = active_pso[cmd]->desc.rootSignature;
-			break;
-		case wiGraphics::COMPUTE:
-			rootsig = active_cs[cmd]->rootSignature;
-			break;
-		case wiGraphics::RAYTRACING:
-			rootsig = active_rt[cmd]->desc.rootSignature;
-			break;
-		}
-		auto rootsig_internal = to_internal(rootsig);
-		auto& descriptors = GetFrameResources().descriptors[cmd];
-		rootsig_internal->last_tables[cmd][space] = table;
-		rootsig_internal->last_descriptorsets[cmd][space] = descriptors.commit(table);
-		rootsig_internal->dirty[cmd] = true;
-		for (auto& x : rootsig_internal->root_descriptors[cmd])
-		{
-			x = nullptr;
-		}
-	}
-	void GraphicsDevice_Vulkan::BindRootDescriptor(BINDPOINT bindpoint, uint32_t index, const GPUBuffer* buffer, uint32_t offset, CommandList cmd)
-	{
-		const RootSignature* rootsig = nullptr;
-		switch (bindpoint)
-		{
-		default:
-		case wiGraphics::GRAPHICS:
-			rootsig = active_pso[cmd]->desc.rootSignature;
-			break;
-		case wiGraphics::COMPUTE:
-			rootsig = active_cs[cmd]->rootSignature;
-			break;
-		case wiGraphics::RAYTRACING:
-			rootsig = active_rt[cmd]->desc.rootSignature;
-			break;
-		}
-		auto rootsig_internal = to_internal(rootsig);
-		rootsig_internal->root_offsets[cmd][index] = offset;
-
-		if (buffer != rootsig_internal->root_descriptors[cmd][index])
-		{
-			rootsig_internal->root_descriptors[cmd][index] = buffer;
-
-			auto remap = rootsig_internal->root_remap[index];
-
-			if (!rootsig_internal->dirty[cmd])
-			{
-				// Need to recommit descriptor set if root descriptor changes and the set is already bound:
-				auto& descriptors = GetFrameResources().descriptors[cmd];
-				VkDescriptorSet set = descriptors.commit(rootsig_internal->last_tables[cmd][remap.space]);
-				rootsig_internal->last_descriptorsets[cmd][remap.space] = set;
-			}
-
-			// Then write root descriptor on top:
-			VkDescriptorBufferInfo bufferInfo = {};
-			bufferInfo.buffer = to_internal(buffer)->resource;
-			bufferInfo.offset = 0;
-
-			VkWriteDescriptorSet write = {};
-			write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-			write.dstSet = rootsig_internal->last_descriptorsets[cmd][remap.space];
-			write.dstBinding = remap.binding;
-			write.dstArrayElement = 0;
-			write.descriptorCount = 1;
-			write.pBufferInfo = &bufferInfo;
-
-			switch (rootsig_internal->last_tables[cmd][remap.space]->resources[remap.rangeIndex].binding)
-			{
-			case ROOT_CONSTANTBUFFER:
-				bufferInfo.range = std::min(buffer->desc.ByteWidth, properties2.properties.limits.maxUniformBufferRange);
-				write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-				break;
-			case ROOT_RAWBUFFER:
-			case ROOT_STRUCTUREDBUFFER:
-			case ROOT_RWRAWBUFFER:
-			case ROOT_RWSTRUCTUREDBUFFER:
-				bufferInfo.range = VK_WHOLE_SIZE;
-				write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
-				break;
-			default:
-				assert(0); // this function is only usable for root buffers!
-				break;
-			}
-
-			vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
-		}
-
-		rootsig_internal->dirty[cmd] = true;
-	}
-	void GraphicsDevice_Vulkan::BindRootConstants(BINDPOINT bindpoint, uint32_t index, const void* srcdata, CommandList cmd)
-	{
-		const RootSignature* rootsig = nullptr;
-		switch (bindpoint)
-		{
-		default:
-		case wiGraphics::GRAPHICS:
-			rootsig = active_pso[cmd]->desc.rootSignature;
-			break;
-		case wiGraphics::COMPUTE:
-			rootsig = active_cs[cmd]->rootSignature;
-			break;
-		case wiGraphics::RAYTRACING:
-			rootsig = active_rt[cmd]->desc.rootSignature;
-			break;
-		}
-		auto rootsig_internal = to_internal(rootsig);
-
-		const RootConstantRange& range = rootsig->rootconstants[index];
-		vkCmdPushConstants(
-			GetDirectCommandList(cmd),
-			rootsig_internal->pipelineLayout,
-			_ConvertStageFlags(range.stage),
-			range.offset,
-			range.size,
-			srcdata
-		);
+		std::memcpy(pushconstants[cmd].data, data, size);
+		pushconstants[cmd].size = size;
 	}
 
 	GraphicsDevice::GPUAllocation GraphicsDevice_Vulkan::AllocateGPU(size_t dataSize, CommandList cmd)
@@ -7058,14 +7103,14 @@ using namespace Vulkan_Internal;
 			label.color[1] = 0;
 			label.color[2] = 0;
 			label.color[3] = 1;
-			vkCmdBeginDebugUtilsLabelEXT(GetDirectCommandList(cmd), &label);
+			vkCmdBeginDebugUtilsLabelEXT(GetCommandList(cmd), &label);
 		}
 	}
 	void GraphicsDevice_Vulkan::EventEnd(CommandList cmd)
 	{
 		if (vkCmdEndDebugUtilsLabelEXT != nullptr)
 		{
-			vkCmdEndDebugUtilsLabelEXT(GetDirectCommandList(cmd));
+			vkCmdEndDebugUtilsLabelEXT(GetCommandList(cmd));
 		}
 	}
 	void GraphicsDevice_Vulkan::SetMarker(const char* name, CommandList cmd)
@@ -7079,7 +7124,7 @@ using namespace Vulkan_Internal;
 			label.color[1] = 0;
 			label.color[2] = 0;
 			label.color[3] = 1;
-			vkCmdInsertDebugUtilsLabelEXT(GetDirectCommandList(cmd), &label);
+			vkCmdInsertDebugUtilsLabelEXT(GetCommandList(cmd), &label);
 		}
 	}
 

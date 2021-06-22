@@ -166,10 +166,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         }
         break;
     case WM_SIZE:
-        wiEvent::FireEvent(SYSTEM_EVENT_CHANGE_RESOLUTION, lParam);
-        break;
     case WM_DPICHANGED:
-        wiEvent::FireEvent(SYSTEM_EVENT_CHANGE_DPI, wParam);
+		if (main.is_window_active)
+			main.SetWindow(hWnd);
         break;
 	case WM_CHAR:
 		switch (wParam)
@@ -192,6 +191,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		}
 		break;
 		}
+		break;
+	case WM_KILLFOCUS:
+		main.is_window_active = false;
+		break;
+	case WM_SETFOCUS:
+		main.is_window_active = true;
 		break;
     case WM_PAINT:
         {

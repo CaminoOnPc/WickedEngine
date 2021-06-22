@@ -11,16 +11,27 @@
 #define WIN32_LEAN_AND_MEAN
 #include <SDKDDKVer.h>
 #include <windows.h>
+#include <tchar.h>
 
 #if WINAPI_FAMILY == WINAPI_FAMILY_APP
 #define PLATFORM_UWP
-#include <Windows.UI.Core.h>
-#include <agile.h>
+#define wiLoadLibrary(name) LoadPackagedLibrary(_T(name),0)
+#define wiGetProcAddress(handle,name) GetProcAddress(handle, name)
+#include <winrt/Windows.UI.Core.h>
+#include <winrt/Windows.Graphics.Display.h>
+#include <winrt/Windows.ApplicationModel.Core.h>
+#else
+#define PLATFORM_WINDOWS_DESKTOP
+#define wiLoadLibrary(name) LoadLibrary(_T(name))
+#define wiGetProcAddress(handle,name) GetProcAddress(handle, name)
 #endif // UWP
 
 #else
 
 #define PLATFORM_LINUX
+#define wiLoadLibrary(name) dlopen(name, RTLD_LAZY)
+#define wiGetProcAddress(handle,name) dlsym(handle, name)
+#define HMODULE (void*)
 
 #endif // _WIN32
 
@@ -33,10 +44,10 @@
 namespace wiPlatform
 {
 #ifdef _WIN32
-#ifndef PLATFORM_UWP
-	using window_type = HWND;
+#ifdef PLATFORM_UWP
+	using window_type = const winrt::Windows::UI::Core::CoreWindow*;
 #else
-	using window_type = Platform::Agile<Windows::UI::Core::CoreWindow>;
+	using window_type = HWND;
 #endif // PLATFORM_UWP
 #elif SDL2
 	using window_type = SDL_Window*;
@@ -44,73 +55,46 @@ namespace wiPlatform
 	using window_type = int;
 #endif // _WIN32
 
-	struct WindowState
-	{
-		window_type window;
-		int dpi = 96;
-	};
-	inline WindowState& GetWindowState()
-	{
-		static WindowState state;
-		return state;
-	}
-
-	inline window_type& GetWindow()
-	{
-		return GetWindowState().window;
-	}
-	inline bool IsWindowActive()
-	{
-#ifdef _WIN32
-#ifndef PLATFORM_UWP
-		return GetForegroundWindow() == GetWindow();
-#else
-		return true;
-#endif // PLATFORM_UWP
-#else
-		return true;
-#endif // _WIN32
-	}
-	inline void InitDPI()
-	{
-#ifdef _WIN32
-#ifndef PLATFORM_UWP
-		GetWindowState().dpi = (int)GetDpiForWindow(GetWindow());
-#else
-		GetWindowState().dpi = (int)Windows::Graphics::Display::DisplayInformation::GetForCurrentView()->LogicalDpi;
-#endif // PLATFORM_UWP
-#elif SDL2
-		int displayIndex = 0;
-		float ddpi;
-		float hdpi;
-		float vdpi;
-		int ret = SDL_GetDisplayDPI(displayIndex, &ddpi, &hdpi, &vdpi);
-		if (ret == 0) {
-		    //TODO setting the correct DPI resolution messes up with the correct mouse position.
-		    // I believe it's because SDL2 is reporting the correct pixel position while windows is reporting
-		    // a corrected version of the mouse position that needs to be interpreted depending on the DPI.
-		    //GetWindowState().dpi = ddpi;
-		} else {
-		    std::clog << "Could not infer Display DPI from SDL: " << SDL_GetError() << std::endl;
-		}
-#endif // _WIN32
-	}
-	inline int GetDPI()
-	{
-		return GetWindowState().dpi;
-	}
-	inline float GetDPIScaling()
-	{
-		return (float)GetDPI() / 96.0f;
-	}
 	inline void Exit()
 	{
 #ifdef _WIN32
 #ifndef PLATFORM_UWP
 		PostQuitMessage(0);
 #else
-		Windows::ApplicationModel::Core::CoreApplication::Exit();
+		winrt::Windows::ApplicationModel::Core::CoreApplication::Exit();
 #endif // PLATFORM_UWP
 #endif // _WIN32
+#ifdef SDL2
+		SDL_Quit();
+#endif
+	}
+
+	struct WindowProperties
+	{
+		int width = 0;
+		int height = 0;
+		float dpi = 96;
+	};
+	inline void GetWindowProperties(window_type window, WindowProperties* dest)
+	{
+#ifdef PLATFORM_WINDOWS_DESKTOP
+		dest->dpi = (float)GetDpiForWindow(window);
+		RECT rect;
+		GetClientRect(window, &rect);
+		dest->width = uint32_t(rect.right - rect.left);
+		dest->height = uint32_t(rect.bottom - rect.top);
+#endif // WINDOWS_DESKTOP
+
+#ifdef PLATFORM_UWP
+		dest->dpi = winrt::Windows::Graphics::Display::DisplayInformation::GetForCurrentView().LogicalDpi();
+		float dpiscale = dest->dpi / 96.f;
+		dest->width = uint32_t(window->Bounds().Width * dpiscale);
+		dest->height = uint32_t(window->Bounds().Height * dpiscale);
+#endif // PLATFORM_UWP
+
+#ifdef PLATFORM_LINUX
+		dest->dpi = 96; // todo
+		SDL_GetWindowSize(window, &dest->width, &dest->height);
+#endif // PLATFORM_LINUX
 	}
 }

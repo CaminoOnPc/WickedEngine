@@ -90,9 +90,9 @@ public:
 	wiCheckBox isRotatorCheckBox;
 	wiCheckBox isTranslatorCheckBox;
 	wiButton saveButton;
+	wiComboBox saveModeComboBox;
 	wiButton modelButton;
 	wiButton scriptButton;
-	wiButton shaderButton;
 	wiButton clearButton;
 	wiButton helpButton;
 	wiButton exitButton;
@@ -107,6 +107,9 @@ public:
 	std::unordered_set<wiECS::Entity> scenegraphview_opened_items;
 	void PushToSceneGraphView(wiECS::Entity entity, int level);
 	void RefreshSceneGraphView();
+
+	wiSlider pathTraceTargetSlider;
+	wiLabel pathTraceStatisticsLabel;
 
 	std::unique_ptr<RenderPath3D> renderPath;
 	enum RENDERPATH
