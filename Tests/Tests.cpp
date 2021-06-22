@@ -178,8 +178,9 @@ void TestsRenderer::Load()
 			wiScene::LoadModel("../models/hairparticle_torus.wiscene", XMMatrixTranslation(0, 1, 0));
 			break;
 		case 5:
-			wiRenderer::SetToDrawGridHelper(true);
-			wiLua::RunFile("test_script.lua");
+			//wiScene::LoadModel("../models/playground.wiscene");
+			//wiRenderer::SetToDrawGridHelper(true);
+			wiLua::RunFile("../scripts/character_controller_tps.lua");
 			break;
 		case 6:
 			wiRenderer::SetTemporalAAEnabled(true);

@@ -52,6 +52,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	main.infoDisplay.resolution = true;
 	main.infoDisplay.fpsinfo = true;
 
+	ActivatePath(&*m_Loading, 0.2f);
+	ActivatePath(&*m_Renderer);
+
+	wiLua::RunFile("../scripts/character_controller_tps.lua");
+
 	MSG msg = { 0 };
 	while (msg.message != WM_QUIT)
 	{

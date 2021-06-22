@@ -233,36 +233,16 @@ namespace wiFont
 {
 
 
-void LoadShaders()
-{
-	std::string path = wiRenderer::GetShaderPath();
-
-	wiRenderer::LoadShader(VS, vertexShader, "fontVS.cso");
-
-
-	pixelShader.auto_samplers.emplace_back();
-	pixelShader.auto_samplers.back().sampler = sampler;
-	pixelShader.auto_samplers.back().slot = SSLOT_ONDEMAND1;
-
-	wiRenderer::LoadShader(PS, pixelShader, "fontPS.cso");
-
-
-	PipelineStateDesc desc;
-	desc.vs = &vertexShader;
-	desc.ps = &pixelShader;
-	desc.bs = &blendState;
-	desc.dss = &depthStencilState;
-	desc.rs = &rasterizerState;
-	desc.pt = TRIANGLESTRIP;
-	wiRenderer::GetDevice()->CreatePipelineState(&desc, &PSO);
-}
-void Initialize()
-{
-	if (initialized)
+	void LoadShaders()
 	{
 		std::string path = wiRenderer::GetShaderPath();
 
 		wiRenderer::LoadShader(VS, vertexShader, "fontVS.cso");
+
+
+		pixelShader.auto_samplers.emplace_back();
+		pixelShader.auto_samplers.back().sampler = sampler;
+		pixelShader.auto_samplers.back().slot = SSLOT_ONDEMAND1;
 
 		wiRenderer::LoadShader(PS, pixelShader, "fontPS.cso");
 
@@ -618,13 +598,11 @@ void Initialize()
 			device->BindConstantBuffer(VS, &constantBuffer, CB_GETBINDSLOT(FontCB), cmd);
 			device->BindConstantBuffer(PS, &constantBuffer, CB_GETBINDSLOT(FontCB), cmd);
 			device->BindResource(PS, &texture, TEXSLOT_FONTATLAS, cmd);
-			device->BindSampler(PS, &sampler, SSLOT_ONDEMAND1, cmd);
 
 			device->BindResource(VS, mem.buffer, 0, cmd);
 
-			device->BindConstantBuffer(VS, &constantBuffer, CB_GETBINDSLOT(FontCB), cmd);
-			device->BindConstantBuffer(PS, &constantBuffer, CB_GETBINDSLOT(FontCB), cmd);
-			device->BindResource(PS, &texture, TEXSLOT_FONTATLAS, cmd);
+			FontCB cb;
+			cb.g_xFont_BufferOffset = mem.offset;
 
 			XMMATRIX Projection = device->GetScreenProjection();
 

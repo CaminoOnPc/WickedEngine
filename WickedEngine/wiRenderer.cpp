@@ -8362,7 +8362,7 @@ void UpdateCameraCB(
 	CommandList cmd
 )
 {
-	CameraCB cb;
+	CameraCB cb;	
 
 	XMStoreFloat4x4(&cb.g_xCamera_VP, camera.GetViewProjection());
 	XMStoreFloat4x4(&cb.g_xCamera_View, camera.GetView());
