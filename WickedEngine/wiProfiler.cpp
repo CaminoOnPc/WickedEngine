@@ -7,12 +7,13 @@
 #include "wiTextureHelper.h"
 #include "wiHelper.h"
 
-#include <sstream>
+#include <string>
 #include <unordered_map>
 #include <stack>
 #include <mutex>
+#include <atomic>
+#include <sstream>
 
-using namespace std;
 using namespace wiGraphics;
 
 namespace wiProfiler
@@ -22,6 +23,11 @@ namespace wiProfiler
 	std::mutex lock;
 	range_id cpu_frame;
 	range_id gpu_frame;
+	GPUQueryHeap queryHeap[wiGraphics::GraphicsDevice::GetBufferCount() + 1];
+	std::vector<uint64_t> queryResults;
+	std::atomic<uint32_t> nextQuery{ 0 };
+	uint32_t writtenQueries[arraysize(queryHeap)] = {};
+	int queryheap_idx = 0;
 
 	struct Range
 	{
@@ -33,13 +39,12 @@ namespace wiProfiler
 
 		wiTimer cpuBegin, cpuEnd;
 
-		wiRenderer::GPUQueryRing<wiGraphics::GraphicsDevice::GetBackBufferCount() + 3> gpuBegin;
-		wiRenderer::GPUQueryRing<wiGraphics::GraphicsDevice::GetBackBufferCount() + 3> gpuEnd;
+		int gpuBegin[arraysize(queryHeap)];
+		int gpuEnd[arraysize(queryHeap)];
 
 		bool IsCPURange() const { return cmd == COMMANDLIST_COUNT; }
 	};
 	std::unordered_map<size_t, Range> ranges;
-	wiRenderer::GPUQueryRing<wiGraphics::GraphicsDevice::GetBackBufferCount() + 3> disjoint;
 
 	void BeginFrame()
 	{
@@ -52,16 +57,21 @@ namespace wiProfiler
 
 			ranges.reserve(100);
 
-			GPUQueryDesc desc;
-			desc.Type = GPU_QUERY_TYPE_TIMESTAMP_DISJOINT;
-			disjoint.Create(wiRenderer::GetDevice(), &desc);
+			GPUQueryHeapDesc desc;
+			desc.type = GPU_QUERY_TYPE_TIMESTAMP;
+			desc.queryCount = 1024;
+			for (int i = 0; i < arraysize(queryHeap); ++i)
+			{
+				bool success = wiRenderer::GetDevice()->CreateQueryHeap(&desc, &queryHeap[i]);
+				assert(success);
+			}
+
+			queryResults.resize(desc.queryCount);
 		}
 
-		CommandList cmd = wiRenderer::GetDevice()->BeginCommandList(); // it would be a good idea to not start a new command list just for these couple of queries!
-		wiRenderer::GetDevice()->QueryBegin(disjoint.Get_GPU(), cmd);
-		wiRenderer::GetDevice()->QueryEnd(disjoint.Get_GPU(), cmd); // this should be at the end of frame, but the problem is that there will be other command lists submitted in between and it doesn't work that way in DX11
-
 		cpu_frame = BeginRangeCPU("CPU Frame");
+
+		CommandList cmd = wiRenderer::GetDevice()->BeginCommandList();
 		gpu_frame = BeginRangeGPU("GPU Frame", cmd);
 	}
 	void EndFrame(CommandList cmd)
@@ -69,16 +79,25 @@ namespace wiProfiler
 		if (!ENABLED || !initialized)
 			return;
 
+		GraphicsDevice* device = wiRenderer::GetDevice();
+
 		// note: read the GPU Frame end range manually because it will be on a separate command list than start point:
-		wiRenderer::GetDevice()->QueryEnd(ranges[gpu_frame].gpuEnd.Get_GPU(), cmd);
+		auto& gpu_range = ranges[gpu_frame];
+		gpu_range.gpuEnd[queryheap_idx] = nextQuery.fetch_add(1);
+		device->QueryEnd(&queryHeap[queryheap_idx], gpu_range.gpuEnd[queryheap_idx], cmd);
 
 		EndRange(cpu_frame);
 
-		GPUQueryResult disjoint_result;
-		GPUQuery* disjoint_query = disjoint.Get_CPU();
-		if (disjoint_query != nullptr)
+		double gpu_frequency = (double)device->GetTimestampFrequency() / 1000.0;
+
+		device->QueryResolve(&queryHeap[queryheap_idx], 0, nextQuery.load(), cmd);
+
+		writtenQueries[queryheap_idx] = nextQuery.load();
+		nextQuery.store(0);
+		queryheap_idx = (queryheap_idx + 1) % arraysize(queryHeap);
+		if (writtenQueries[queryheap_idx] > 0)
 		{
-			wiRenderer::GetDevice()->QueryRead(disjoint_query, &disjoint_result);
+			wiRenderer::GetDevice()->QueryRead(&queryHeap[queryheap_idx], 0, writtenQueries[queryheap_idx], queryResults.data());
 		}
 
 		for (auto& x : ranges)
@@ -92,15 +111,16 @@ namespace wiProfiler
 			}
 			else
 			{
-				GPUQuery* begin_query = range.gpuBegin.Get_CPU();
-				GPUQuery* end_query = range.gpuEnd.Get_CPU();
-				GPUQueryResult begin_result, end_result;
-				if (begin_query != nullptr && end_query != nullptr)
+				int begin_query = range.gpuBegin[queryheap_idx];
+				int end_query = range.gpuEnd[queryheap_idx];
+				if (begin_query >= 0 && end_query >= 0)
 				{
-					wiRenderer::GetDevice()->QueryRead(begin_query, &begin_result);
-					wiRenderer::GetDevice()->QueryRead(end_query, &end_result);
+					uint64_t begin_result = queryResults[begin_query];
+					uint64_t end_result = queryResults[end_query];
+					range.time = (float)abs((double)(end_result - begin_result) / gpu_frequency);
 				}
-				range.time = abs((float)(end_result.result_timestamp - begin_result.result_timestamp) / disjoint_result.result_timestamp_frequency * 1000.0f);
+				range.gpuBegin[queryheap_idx] = -1;
+				range.gpuEnd[queryheap_idx] = -1;
 			}
 			range.times[range.avg_counter++ % arraysize(range.times)] = range.time;
 
@@ -130,10 +150,7 @@ namespace wiProfiler
 			range.name = name;
 			range.time = 0;
 
-			range.cpuBegin.Start();
-			range.cpuEnd.Start();
-
-			ranges.insert(make_pair(id, range));
+			ranges[id] = range;
 		}
 
 		ranges[id].cpuBegin.record();
@@ -156,16 +173,16 @@ namespace wiProfiler
 			range.name = name;
 			range.time = 0;
 
-			GPUQueryDesc desc;
-			desc.Type = GPU_QUERY_TYPE_TIMESTAMP;
-			range.gpuBegin.Create(wiRenderer::GetDevice(), &desc);
-			range.gpuEnd.Create(wiRenderer::GetDevice(), &desc);
+			std::fill(range.gpuBegin, range.gpuBegin + arraysize(queryHeap), -1);
+			std::fill(range.gpuEnd, range.gpuEnd + arraysize(queryHeap), -1);
 
-			ranges.insert(make_pair(id, range));
+			ranges[id] = range;
 		}
 
 		ranges[id].cmd = cmd;
-		wiRenderer::GetDevice()->QueryEnd(ranges[id].gpuBegin.Get_GPU(), cmd);
+
+		ranges[id].gpuBegin[queryheap_idx] = nextQuery.fetch_add(1);
+		wiRenderer::GetDevice()->QueryEnd(&queryHeap[queryheap_idx], ranges[id].gpuBegin[queryheap_idx], cmd);
 
 		lock.unlock();
 
@@ -187,7 +204,8 @@ namespace wiProfiler
 			}
 			else
 			{
-				wiRenderer::GetDevice()->QueryEnd(it->second.gpuEnd.Get_GPU(), it->second.cmd);
+				ranges[id].gpuEnd[queryheap_idx] = nextQuery.fetch_add(1);
+				wiRenderer::GetDevice()->QueryEnd(&queryHeap[queryheap_idx], it->second.gpuEnd[queryheap_idx], it->second.cmd);
 			}
 		}
 		else
@@ -198,31 +216,34 @@ namespace wiProfiler
 		lock.unlock();
 	}
 
-	void DrawData(float x, float y, CommandList cmd)
+	void DrawData(const wiCanvas& canvas, float x, float y, CommandList cmd)
 	{
 		if (!ENABLED || !initialized)
 			return;
 
-		stringstream ss("");
+		wiImage::SetCanvas(canvas, cmd);
+		wiFont::SetCanvas(canvas, cmd);
+
+		std::stringstream ss("");
 		ss.precision(2);
-		ss << "Frame Profiler Ranges:" << endl << "----------------------------" << endl;
+		ss << "Frame Profiler Ranges:" << std::endl << "----------------------------" << std::endl;
 
 		// Print CPU ranges:
 		for (auto& x : ranges)
 		{
 			if (x.second.IsCPURange())
 			{
-				ss << x.second.name << ": " << fixed << x.second.time << " ms" << endl;
+				ss << x.second.name << ": " << std::fixed << x.second.time << " ms" << std::endl;
 			}
 		}
-		ss << endl;
+		ss << std::endl;
 
 		// Print GPU ranges:
 		for (auto& x : ranges)
 		{
 			if (!x.second.IsCPURange())
 			{
-				ss << x.second.name << ": " << fixed << x.second.time << " ms" << endl;
+				ss << x.second.name << ": " << std::fixed << x.second.time << " ms" << std::endl;
 			}
 		}
 

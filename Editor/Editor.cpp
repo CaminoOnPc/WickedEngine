@@ -8,54 +8,106 @@
 #include <sstream>
 #include <cassert>
 #include <cmath>
+#include <filesystem>
 
-#ifdef PLATFORM_UWP
-#include <collection.h>
-#include <ppltasks.h>
-using namespace concurrency;
-using namespace Platform;
-using namespace Windows::Storage;
-using namespace Windows::Storage::Pickers;
-using namespace Windows::Storage::AccessCache;
-using namespace Windows::Foundation::Collections;
-void copy_folder(StorageFolder^ src, StorageFolder^ dst) {
-	create_task(src->GetItemsAsync()).then([=](IVectorView<IStorageItem^>^ items) {
-		for (IStorageItem^ item : items)
-		{
-			if (item->IsOfType(StorageItemTypes::File))
-			{
-				StorageFile^ file = (StorageFile^)item;
-				try {
-					file->CopyAsync(dst);
-				}
-				catch (...) {
-					// file already exists, we don't want to overwrite
-				}
-			}
-			else if (item->IsOfType(StorageItemTypes::Folder))
-			{
-				StorageFolder^ src_child = (StorageFolder^)item;
-				create_task(dst->CreateFolderAsync(item->Name, CreationCollisionOption::OpenIfExists)).then([=](StorageFolder^ dst_child) {
-					if (dst_child)
-					{
-						copy_folder(src_child, dst_child);
-					}
-				});
-			}
-		}
-	});
-};
-#endif // PLATFORM_UWP
-
-using namespace std;
 using namespace wiGraphics;
 using namespace wiRectPacker;
 using namespace wiScene;
 using namespace wiECS;
 
+
+#ifdef PLATFORM_UWP
+#include <winrt/Windows.Storage.h>
+#include <winrt/Windows.Foundation.Collections.h>
+using namespace winrt::Windows::Storage;
+winrt::fire_and_forget copy_folder(StorageFolder src, StorageFolder dst)
+{
+	auto items = co_await src.GetItemsAsync();
+	for (auto item : items)
+	{
+		if (item.IsOfType(StorageItemTypes::File))
+		{
+			StorageFile file = item.as<StorageFile>();
+			try {
+				file.CopyAsync(dst);
+			}
+			catch (...) {
+				// file already exists, we don't want to overwrite
+			}
+		}
+		else if (item.IsOfType(StorageItemTypes::Folder))
+		{
+			StorageFolder src_child = item.as<StorageFolder>();
+			auto dst_child = co_await dst.CreateFolderAsync(item.Name(), CreationCollisionOption::OpenIfExists);
+			if (dst_child)
+			{
+				copy_folder(src_child, dst_child);
+			}
+		}
+	}
+};
+winrt::fire_and_forget uwp_copy_assets()
+{
+	// On UWP we will copy the base content from application folder to 3D Objects directory
+	//	for easy access to the user:
+	StorageFolder location = KnownFolders::Objects3D();
+
+	// Objects3D/WickedEngine
+	auto destfolder = co_await location.CreateFolderAsync(L"WickedEngine", CreationCollisionOption::OpenIfExists);
+
+	std::string rootdir = std::filesystem::current_path().string() + "\\";
+	std::wstring wstr;
+
+	// scripts:
+	{
+		wiHelper::StringConvert(rootdir + "scripts\\", wstr);
+		auto src = co_await StorageFolder::GetFolderFromPathAsync(wstr.c_str());
+		if (src)
+		{
+			auto dst = co_await destfolder.CreateFolderAsync(L"scripts", CreationCollisionOption::OpenIfExists);
+			if (dst)
+			{
+				copy_folder(src, dst);
+			}
+		}
+	}
+
+	// models:
+	{
+		wiHelper::StringConvert(rootdir + "models\\", wstr);
+		auto src = co_await StorageFolder::GetFolderFromPathAsync(wstr.c_str());
+		if (src)
+		{
+			auto dst = co_await destfolder.CreateFolderAsync(L"models", CreationCollisionOption::OpenIfExists);
+			if (dst)
+			{
+				copy_folder(src, dst);
+			}
+		}
+	}
+
+	// Documentation:
+	{
+		wiHelper::StringConvert(rootdir + "Documentation\\", wstr);
+		auto src = co_await StorageFolder::GetFolderFromPathAsync(wstr.c_str());
+		if (src)
+		{
+			auto dst = destfolder.CreateFolderAsync(L"Documentation", CreationCollisionOption::OpenIfExists).get();
+			if (dst)
+			{
+				copy_folder(src, dst);
+			}
+		}
+	}
+}
+#endif // PLATFORM_UWP
+
 void Editor::Initialize()
 {
 	MainComponent::Initialize();
+
+	// With this mode, file data for resources will be kept around. This allows serializing embedded resource data inside scenes
+	wiResourceManager::SetMode(wiResourceManager::MODE_ALLOW_RETAIN_FILEDATA);
 
 	infoDisplay.active = true;
 	infoDisplay.watermark = true;
@@ -63,7 +115,6 @@ void Editor::Initialize()
 	infoDisplay.resolution = true;
 	infoDisplay.heap_allocation_counter = true;
 
-	wiRenderer::GetDevice()->SetVSyncEnabled(true);
 	wiRenderer::SetOcclusionCullingEnabled(true);
 
 	loader.Load();
@@ -78,14 +129,13 @@ void Editor::Initialize()
 
 void EditorLoadingScreen::Load()
 {
-	font = wiSpriteFont("Loading...", wiFontParams(wiRenderer::GetDevice()->GetScreenWidth()*0.5f, wiRenderer::GetDevice()->GetScreenHeight()*0.5f, 36,
+	font = wiSpriteFont("Loading...", wiFontParams(0, 0, 36,
 		WIFALIGN_CENTER, WIFALIGN_CENTER));
 	AddFont(&font);
 
 	sprite = wiSprite("images/logo_small.png");
 	sprite.anim.opa = 1;
 	sprite.anim.repeatable = true;
-	sprite.params.pos = XMFLOAT3(wiRenderer::GetDevice()->GetScreenWidth()*0.5f, wiRenderer::GetDevice()->GetScreenHeight()*0.5f - font.textHeight(), 0);
 	sprite.params.siz = XMFLOAT2(128, 128);
 	sprite.params.pivot = XMFLOAT2(0.5f, 1.0f);
 	sprite.params.quality = QUALITY_LINEAR;
@@ -96,9 +146,9 @@ void EditorLoadingScreen::Load()
 }
 void EditorLoadingScreen::Update(float dt)
 {
-	font.params.posX = wiRenderer::GetDevice()->GetScreenWidth()*0.5f;
-	font.params.posY = wiRenderer::GetDevice()->GetScreenHeight()*0.5f;
-	sprite.params.pos = XMFLOAT3(wiRenderer::GetDevice()->GetScreenWidth()*0.5f, wiRenderer::GetDevice()->GetScreenHeight()*0.5f - font.textHeight(), 0);
+	font.params.posX = GetLogicalWidth()*0.5f;
+	font.params.posY = GetLogicalHeight()*0.5f;
+	sprite.params.pos = XMFLOAT3(GetLogicalWidth()*0.5f, GetLogicalHeight()*0.5f - font.textHeight(), 0);
 
 	LoadingScreen::Update(dt);
 }
@@ -110,9 +160,13 @@ void EditorComponent::ChangeRenderPath(RENDERPATH path)
 	{
 	case EditorComponent::RENDERPATH_DEFAULT:
 		renderPath = std::make_unique<RenderPath3D>();
+		pathTraceTargetSlider.SetVisible(false);
+		pathTraceStatisticsLabel.SetVisible(false);
 		break;
 	case EditorComponent::RENDERPATH_PATHTRACING:
 		renderPath = std::make_unique<RenderPath3D_PathTracing>();
+		pathTraceTargetSlider.SetVisible(true);
+		pathTraceStatisticsLabel.SetVisible(true);
 		break;
 	default:
 		assert(0);
@@ -120,17 +174,6 @@ void EditorComponent::ChangeRenderPath(RENDERPATH path)
 	}
 
 	renderPath->resolutionScale = resolutionScale;
-
-	renderPath->setShadowsEnabled(true);
-	renderPath->setReflectionsEnabled(true);
-	renderPath->setAO(RenderPath3D::AO_DISABLED);
-	renderPath->setSSREnabled(false);
-	renderPath->setMotionBlurEnabled(false);
-	renderPath->setColorGradingEnabled(false);
-	renderPath->setEyeAdaptionEnabled(false);
-	renderPath->setFXAAEnabled(false);
-	renderPath->setDepthOfFieldEnabled(false);
-	renderPath->setLightShaftsEnabled(false);
 
 	renderPath->Load();
 
@@ -147,22 +190,26 @@ void EditorComponent::ChangeRenderPath(RENDERPATH path)
 	postprocessWnd = PostprocessWindow();
 	postprocessWnd.Create(this);
 	gui.AddWidget(&postprocessWnd);
-
-	ResizeBuffers();
 }
 
 void EditorComponent::ResizeBuffers()
 {
+	init(main->canvas);
 	RenderPath2D::ResizeBuffers();
 
 	GraphicsDevice* device = wiRenderer::GetDevice();
 	bool hr;
 
-	if(renderPath != nullptr && renderPath->GetDepthStencil() != nullptr)
+	renderPath->init(*this);
+	renderPath->ResizeBuffers();
+
+	if(renderPath->GetDepthStencil() != nullptr)
 	{
+		XMUINT2 internalResolution = GetInternalResolution();
+
 		TextureDesc desc;
-		desc.Width = GetInternalResolution().x;
-		desc.Height = GetInternalResolution().y;
+		desc.Width = internalResolution.x;
+		desc.Height = internalResolution.y;
 
 		desc.Format = FORMAT_R8_UNORM;
 		desc.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE;
@@ -219,8 +266,8 @@ void EditorComponent::ResizeLayout()
 
 	// GUI elements scaling:
 
-	float screenW = wiRenderer::GetDevice()->GetScreenWidth();
-	float screenH = wiRenderer::GetDevice()->GetScreenHeight();
+	float screenW = GetLogicalWidth();
+	float screenH = GetLogicalHeight();
 
 	XMFLOAT2 option_size = XMFLOAT2(100, 34);
 	float x = screenW - option_size.x;
@@ -300,29 +347,26 @@ void EditorComponent::ResizeLayout()
 
 	////////////////////////////////////////////////////////////////////////////////////
 
-	translatorCheckBox.SetPos(XMFLOAT2(screenW - 50 - 55 - 105 * 5 - 25, 0));
+	translatorCheckBox.SetPos(XMFLOAT2(screenW - 50 - 55 - 105 * 4 - 25, 0));
 	translatorCheckBox.SetSize(XMFLOAT2(18, 18));
 
-	isScalatorCheckBox.SetPos(XMFLOAT2(screenW - 50 - 55 - 105 * 5 - 25 - 40 * 2, 22));
+	isScalatorCheckBox.SetPos(XMFLOAT2(screenW - 50 - 55 - 105 * 4 - 25 - 40 * 2, 22));
 	isScalatorCheckBox.SetSize(XMFLOAT2(18, 18));
 
-	isRotatorCheckBox.SetPos(XMFLOAT2(screenW - 50 - 55 - 105 * 5 - 25 - 40 * 1, 22));
+	isRotatorCheckBox.SetPos(XMFLOAT2(screenW - 50 - 55 - 105 * 4 - 25 - 40 * 1, 22));
 	isRotatorCheckBox.SetSize(XMFLOAT2(18, 18));
 
-	isTranslatorCheckBox.SetPos(XMFLOAT2(screenW - 50 - 55 - 105 * 5 - 25, 22));
+	isTranslatorCheckBox.SetPos(XMFLOAT2(screenW - 50 - 55 - 105 * 4 - 25, 22));
 	isTranslatorCheckBox.SetSize(XMFLOAT2(18, 18));
 
-	saveButton.SetPos(XMFLOAT2(screenW - 50 - 55 - 105 * 5, 0));
+	saveButton.SetPos(XMFLOAT2(screenW - 50 - 55 - 105 * 4, 0));
 	saveButton.SetSize(XMFLOAT2(100, 40));
 
-	modelButton.SetPos(XMFLOAT2(screenW - 50 - 55 - 105 * 4, 0));
+	modelButton.SetPos(XMFLOAT2(screenW - 50 - 55 - 105 * 3, 0));
 	modelButton.SetSize(XMFLOAT2(100, 40));
 
-	scriptButton.SetPos(XMFLOAT2(screenW - 50 - 55 - 105 * 3, 0));
+	scriptButton.SetPos(XMFLOAT2(screenW - 50 - 55 - 105 * 2, 0));
 	scriptButton.SetSize(XMFLOAT2(100, 40));
-
-	shaderButton.SetPos(XMFLOAT2(screenW - 50 - 55 - 105 * 2, 0));
-	shaderButton.SetSize(XMFLOAT2(100, 40));
 
 	clearButton.SetPos(XMFLOAT2(screenW - 50 - 55 - 105 * 1, 0));
 	clearButton.SetSize(XMFLOAT2(100, 40));
@@ -337,7 +381,7 @@ void EditorComponent::ResizeLayout()
 	exitButton.SetSize(XMFLOAT2(50, 40));
 
 	profilerEnabledCheckBox.SetSize(XMFLOAT2(20, 20));
-	profilerEnabledCheckBox.SetPos(XMFLOAT2(screenW - 520, 45));
+	profilerEnabledCheckBox.SetPos(XMFLOAT2(screenW - 530, 45));
 
 	physicsEnabledCheckBox.SetSize(XMFLOAT2(20, 20));
 	physicsEnabledCheckBox.SetPos(XMFLOAT2(screenW - 370, 45));
@@ -348,65 +392,22 @@ void EditorComponent::ResizeLayout()
 	renderPathComboBox.SetSize(XMFLOAT2(100, 20));
 	renderPathComboBox.SetPos(XMFLOAT2(screenW - 120, 45));
 
+	saveModeComboBox.SetSize(XMFLOAT2(120, 20));
+	saveModeComboBox.SetPos(XMFLOAT2(screenW - 140, 70));
+
+	pathTraceTargetSlider.SetSize(XMFLOAT2(200, 20));
+	pathTraceTargetSlider.SetPos(XMFLOAT2(screenW - 240, 100));
+
+	pathTraceStatisticsLabel.SetSize(XMFLOAT2(240, 60));
+	pathTraceStatisticsLabel.SetPos(XMFLOAT2(screenW - 240, 125));
+
 	sceneGraphView.SetSize(XMFLOAT2(260, 300));
 	sceneGraphView.SetPos(XMFLOAT2(0, screenH - sceneGraphView.scale_local.y));
 }
 void EditorComponent::Load()
 {
 #ifdef PLATFORM_UWP
-	// On UWP we will copy the base content from application folder to 3D Objects directory
-	//	for easy access to the user:
-	StorageFolder^ location = KnownFolders::Objects3D;
-
-	// Objects3D/WickedEngine
-	create_task(location->CreateFolderAsync("WickedEngine", CreationCollisionOption::OpenIfExists)).then([=](StorageFolder^ destfolder) {
-
-		string rootdir = wiHelper::ExpandPath(wiHelper::GetOriginalWorkingDirectory());
-		wstring wstr;
-
-		// scripts:
-		wiHelper::StringConvert(rootdir + "scripts\\", wstr);
-		create_task(StorageFolder::GetFolderFromPathAsync(ref new String(wstr.c_str()))).then([=](StorageFolder^ src) {
-			if (src)
-			{
-				create_task(destfolder->CreateFolderAsync("scripts", CreationCollisionOption::OpenIfExists)).then([=](StorageFolder^ dst) {
-					if (dst)
-					{
-						copy_folder(src, dst);
-					}
-				});
-			}
-		});
-
-		// models:
-		wiHelper::StringConvert(rootdir + "models\\", wstr);
-		create_task(StorageFolder::GetFolderFromPathAsync(ref new String(wstr.c_str()))).then([=](StorageFolder^ src) {
-			if (src)
-			{
-				create_task(destfolder->CreateFolderAsync("models", CreationCollisionOption::OpenIfExists)).then([=](StorageFolder^ dst) {
-					if (dst)
-					{
-						copy_folder(src, dst);
-					}
-				});
-			}
-		});
-
-		// Documentation:
-		wiHelper::StringConvert(rootdir + "Documentation\\", wstr);
-		create_task(StorageFolder::GetFolderFromPathAsync(ref new String(wstr.c_str()))).then([=](StorageFolder^ src) {
-			if (src)
-			{
-				create_task(destfolder->CreateFolderAsync("Documentation", CreationCollisionOption::OpenIfExists)).then([=](StorageFolder^ dst) {
-					if (dst)
-					{
-						copy_folder(src, dst);
-					}
-				});
-			}
-		});
-
-	});
+	uwp_copy_assets();
 #endif // PLATFORM_UWP
 
 	wiJobSystem::context ctx;
@@ -680,7 +681,8 @@ void EditorComponent::Load()
 		wiHelper::FileDialog(params, [this](std::string fileName) {
 			wiEvent::Subscribe_Once(SYSTEM_EVENT_THREAD_SAFE_POINT, [=](uint64_t userdata) {
 				std::string filename = fileName;
-				if (filename.substr(filename.length() - 8).compare(".wiscene") != 0)
+				std::string extension = wiHelper::GetExtensionFromFileName(filename);
+				if (extension.compare("wiscene"))
 				{
 					filename += ".wiscene";
 				}
@@ -688,6 +690,9 @@ void EditorComponent::Load()
 				if (archive.IsOpen())
 				{
 					Scene& scene = wiScene::GetScene();
+
+					wiResourceManager::MODE embed_mode = (wiResourceManager::MODE)saveModeComboBox.GetItemUserData(saveModeComboBox.GetSelected());
+					wiResourceManager::SetMode(embed_mode);
 
 					scene.Serialize(archive);
 
@@ -718,7 +723,7 @@ void EditorComponent::Load()
 		wiHelper::FileDialog(params, [&](std::string fileName) {
 			wiEvent::Subscribe_Once(SYSTEM_EVENT_THREAD_SAFE_POINT, [=](uint64_t userdata) {
 				main->loader.addLoadingFunction([=](wiJobArgs args) {
-					string extension = wiHelper::toUpper(wiHelper::GetExtensionFromFileName(fileName));
+					std::string extension = wiHelper::toUpper(wiHelper::GetExtensionFromFileName(fileName));
 
 					if (!extension.compare("WISCENE")) // engine-serialized
 					{
@@ -774,19 +779,6 @@ void EditorComponent::Load()
 	GetGUI().AddWidget(&scriptButton);
 
 
-	shaderButton.Create("Reload Shaders");
-	shaderButton.SetTooltip("Reload shaders from the default directory...");
-	shaderButton.SetColor(wiColor(255, 33, 140, 180), wiWidget::WIDGETSTATE::IDLE);
-	shaderButton.SetColor(wiColor(255, 100, 140, 255), wiWidget::WIDGETSTATE::FOCUS);
-	shaderButton.font.params.size -= 2;
-	shaderButton.OnClick([](wiEventArgs args) {
-
-		wiRenderer::ReloadShaders();
-
-	});
-	GetGUI().AddWidget(&shaderButton);
-
-
 	clearButton.Create("Clear World");
 	clearButton.SetTooltip("Delete every model from the scene");
 	clearButton.SetColor(wiColor(255, 173, 43, 180), wiWidget::WIDGETSTATE::IDLE);
@@ -827,33 +819,33 @@ void EditorComponent::Load()
 	GetGUI().AddWidget(&helpButton);
 
 	{
-		stringstream ss("");
-		ss << "Help:" << endl;
-		ss << "Move camera: WASD, or Contoller left stick or D-pad" << endl;
-		ss << "Look: Middle mouse button / arrow keys / controller right stick" << endl;
-		ss << "Select: Right mouse button" << endl;
-		ss << "Place decal, interact with water: Left mouse button when nothing is selected" << endl;
-		ss << "Camera speed: SHIFT button or controller R2/RT" << endl;
-		ss << "Camera up: E, down: Q" << endl;
-		ss << "Duplicate entity: Ctrl + D" << endl;
-		ss << "Select All: Ctrl + A" << endl;
-		ss << "Undo: Ctrl + Z" << endl;
-		ss << "Redo: Ctrl + Y" << endl;
-		ss << "Copy: Ctrl + C" << endl;
-		ss << "Paste: Ctrl + V" << endl;
-		ss << "Delete: DELETE button" << endl;
-		ss << "Place Instances: Ctrl + Shift + Left mouse click (place clipboard onto clicked surface)" << endl;
-		ss << "Script Console / backlog: HOME button" << endl;
-		ss << endl;
-		ss << "You can find sample scenes in the models directory. Try to load one." << endl;
-		ss << "You can also import models from .OBJ, .GLTF, .GLB files." << endl;
-		ss << "You can find a program configuration file at Editor/config.ini" << endl;
-		ss << "You can find sample LUA scripts in the scripts directory. Try to load one." << endl;
-		ss << "You can find a startup script at Editor/startup.lua (this will be executed on program start)" << endl;
-		ss << endl << "For questions, bug reports, feedback, requests, please open an issue at:" << endl;
-		ss << "https://github.com/turanszkij/WickedEngine" << endl;
-		ss << endl << "Devblog: https://wickedengine.net/" << endl;
-		ss << "Discord: https://discord.gg/CFjRYmE" << endl;
+		std::stringstream ss("");
+		ss << "Help:" << std::endl;
+		ss << "Move camera: WASD, or Contoller left stick or D-pad" << std::endl;
+		ss << "Look: Middle mouse button / arrow keys / controller right stick" << std::endl;
+		ss << "Select: Right mouse button" << std::endl;
+		ss << "Interact with water: Left mouse button when nothing is selected" << std::endl;
+		ss << "Camera speed: SHIFT button or controller R2/RT" << std::endl;
+		ss << "Camera up: E, down: Q" << std::endl;
+		ss << "Duplicate entity: Ctrl + D" << std::endl;
+		ss << "Select All: Ctrl + A" << std::endl;
+		ss << "Undo: Ctrl + Z" << std::endl;
+		ss << "Redo: Ctrl + Y" << std::endl;
+		ss << "Copy: Ctrl + C" << std::endl;
+		ss << "Paste: Ctrl + V" << std::endl;
+		ss << "Delete: DELETE button" << std::endl;
+		ss << "Place Instances: Ctrl + Shift + Left mouse click (place clipboard onto clicked surface)" << std::endl;
+		ss << "Script Console / backlog: HOME button" << std::endl;
+		ss << std::endl;
+		ss << "You can find sample scenes in the models directory. Try to load one." << std::endl;
+		ss << "You can also import models from .OBJ, .GLTF, .GLB files." << std::endl;
+		ss << "You can find a program configuration file at Editor/config.ini" << std::endl;
+		ss << "You can find sample LUA scripts in the scripts directory. Try to load one." << std::endl;
+		ss << "You can find a startup script at Editor/startup.lua (this will be executed on program start)" << std::endl;
+		ss << std::endl << "For questions, bug reports, feedback, requests, please open an issue at:" << std::endl;
+		ss << "https://github.com/turanszkij/WickedEngine" << std::endl;
+		ss << std::endl << "Devblog: https://wickedengine.net/" << std::endl;
+		ss << "Discord: https://discord.gg/CFjRYmE" << std::endl;
 
 		helpLabel.Create("HelpLabel");
 		helpLabel.SetText(ss.str());
@@ -879,12 +871,12 @@ void EditorComponent::Load()
 	profilerEnabledCheckBox.SetCheck(wiProfiler::IsEnabled());
 	GetGUI().AddWidget(&profilerEnabledCheckBox);
 
-	physicsEnabledCheckBox.Create("Physics Enabled: ");
-	physicsEnabledCheckBox.SetTooltip("Toggle Physics Engine On/Off");
+	physicsEnabledCheckBox.Create("Physics Simulation: ");
+	physicsEnabledCheckBox.SetTooltip("Toggle Physics Simulation On/Off");
 	physicsEnabledCheckBox.OnClick([&](wiEventArgs args) {
-		wiPhysicsEngine::SetEnabled(args.bValue);
+		wiPhysicsEngine::SetSimulationEnabled(args.bValue);
 	});
-	physicsEnabledCheckBox.SetCheck(wiPhysicsEngine::IsEnabled());
+	physicsEnabledCheckBox.SetCheck(wiPhysicsEngine::IsSimulationEnabled());
 	GetGUI().AddWidget(&physicsEnabledCheckBox);
 
 	cinemaModeCheckBox.Create("Cinema Mode: ");
@@ -933,6 +925,22 @@ void EditorComponent::Load()
 	renderPathComboBox.SetTooltip("Choose a render path...");
 	GetGUI().AddWidget(&renderPathComboBox);
 
+
+	saveModeComboBox.Create("Save Mode: ");
+	saveModeComboBox.SetColor(wiColor(0, 198, 101, 180), wiWidget::WIDGETSTATE::IDLE);
+	saveModeComboBox.SetColor(wiColor(0, 255, 140, 255), wiWidget::WIDGETSTATE::FOCUS);
+	saveModeComboBox.AddItem("Embed resources", wiResourceManager::MODE_ALLOW_RETAIN_FILEDATA);
+	saveModeComboBox.AddItem("No embedding", wiResourceManager::MODE_ALLOW_RETAIN_FILEDATA_BUT_DISABLE_EMBEDDING);
+	saveModeComboBox.SetTooltip("Choose whether to embed resources (textures, sounds...) in the scene file when saving, or keep them as separate files");
+	GetGUI().AddWidget(&saveModeComboBox);
+
+
+	pathTraceTargetSlider.Create(1, 2048, 1024, 2047, "Path tracing sample count: ");
+	pathTraceTargetSlider.SetTooltip("The path tracing will perform this many samples per pixel.");
+	GetGUI().AddWidget(&pathTraceTargetSlider);
+
+	pathTraceStatisticsLabel.Create("Path tracing statistics");
+	GetGUI().AddWidget(&pathTraceStatisticsLabel);
 
 	// Renderer and Postprocess windows are created in ChangeRenderPath(), because they deal with
 	//	RenderPath related information as well, so it's easier to reset them when changing
@@ -1069,7 +1077,7 @@ void EditorComponent::Update(float dt)
 			wiInput::HidePointer(false);
 		}
 
-		const float buttonrotSpeed = 2.0f / 60.0f;
+		const float buttonrotSpeed = 2.0f * dt;
 		if (wiInput::Down(wiInput::KEYBOARD_BUTTON_LEFT))
 		{
 			xDif -= buttonrotSpeed;
@@ -1102,7 +1110,7 @@ void EditorComponent::Update(float dt)
 		if (cameraWnd.fpsCheckBox.GetCheck())
 		{
 			// FPS Camera
-			const float clampedDT = min(dt, 0.1f); // if dt > 100 millisec, don't allow the camera to jump too far...
+			const float clampedDT = std::min(dt, 0.1f); // if dt > 100 millisec, don't allow the camera to jump too far...
 
 			const float speed = ((wiInput::Down(wiInput::KEYBOARD_BUTTON_LSHIFT) ? 10.0f : 1.0f) + rightTrigger.x * 10.0f) * cameraWnd.movespeedSlider.GetValue() * clampedDT;
 			static XMVECTOR move = XMVectorSet(0, 0, 0, 0);
@@ -1174,15 +1182,9 @@ void EditorComponent::Update(float dt)
 	{
 		// Begin picking:
 		unsigned int pickMask = rendererWnd.GetPickType();
-		RAY pickRay = wiRenderer::GetPickRay((long)currentMouse.x, (long)currentMouse.y);
+		RAY pickRay = wiRenderer::GetPickRay((long)currentMouse.x, (long)currentMouse.y, *this);
 		{
 			hovered = wiScene::PickResult();
-
-			// Try to pick objects-meshes:
-			if (pickMask & PICK_OBJECT)
-			{
-				hovered = wiScene::Pick(pickRay, pickMask);
-			}
 
 			if (pickMask & PICK_LIGHT)
 			{
@@ -1341,6 +1343,18 @@ void EditorComponent::Update(float dt)
 				}
 			}
 
+			if (pickMask & PICK_OBJECT && hovered.entity == INVALID_ENTITY)
+			{
+				// Object picking only when mouse button down, because it can be slow with high polycount
+				if (
+					wiInput::Down(wiInput::MOUSE_BUTTON_LEFT) ||
+					wiInput::Down(wiInput::MOUSE_BUTTON_RIGHT) ||
+					paintToolWnd.GetMode() != PaintToolWindow::MODE_DISABLED
+					)
+				{
+					hovered = wiScene::Pick(pickRay, pickMask);
+				}
+			}
 		}
 
 		// Interactions only when paint tool is disabled:
@@ -1357,7 +1371,7 @@ void EditorComponent::Update(float dt)
 						if (wiInput::Down(wiInput::MOUSE_BUTTON_LEFT))
 						{
 							// if water, then put a water ripple onto it:
-							wiRenderer::PutWaterRipple(wiHelper::GetOriginalWorkingDirectory() + "images/ripple.png", hovered.position);
+							scene.PutWaterRipple("images/ripple.png", hovered.position);
 						}
 					}
 					else if (decalWnd.placementCheckBox.GetCheck() && wiInput::Press(wiInput::MOUSE_BUTTON_LEFT))
@@ -1365,7 +1379,7 @@ void EditorComponent::Update(float dt)
 						// if not water or softbody, put a decal on it:
 						static int decalselector = 0;
 						decalselector = (decalselector + 1) % 2;
-						Entity entity = scene.Entity_CreateDecal("editorDecal", wiHelper::GetOriginalWorkingDirectory() + (decalselector == 0 ? "images/leaf.dds" : "images/blood1.png"));
+						Entity entity = scene.Entity_CreateDecal("editorDecal", (decalselector == 0 ? "images/leaf.dds" : "images/blood1.png"));
 						TransformComponent& transform = *scene.transforms.GetComponent(entity);
 						transform.MatrixTransform(hovered.orientation);
 						transform.RotateRollPitchYaw(XMFLOAT3(XM_PIDIV2, 0, 0));
@@ -1424,7 +1438,7 @@ void EditorComponent::Update(float dt)
 				if (!translator.selected.empty() && wiInput::Down(wiInput::KEYBOARD_BUTTON_LSHIFT))
 				{
 					// Union selection:
-					list<wiScene::PickResult> saved = translator.selected;
+					std::list<wiScene::PickResult> saved = translator.selected;
 					translator.selected.clear(); 
 					for (const wiScene::PickResult& picked : saved)
 					{
@@ -1597,6 +1611,7 @@ void EditorComponent::Update(float dt)
 		const wiScene::PickResult& picked = translator.selected.back();
 
 		assert(picked.entity != INVALID_ENTITY);
+		objectWnd.SetEntity(picked.entity);
 
 		for (auto& x : translator.selected)
 		{
@@ -1674,7 +1689,7 @@ void EditorComponent::Update(float dt)
 		}
 	}
 
-	translator.Update();
+	translator.Update(*this);
 
 	if (translator.IsDragEnded())
 	{
@@ -1699,6 +1714,28 @@ void EditorComponent::Update(float dt)
 
 	camera.TransformCamera(cameraWnd.camera_transform);
 	camera.UpdateCamera();
+
+	RenderPath3D_PathTracing* pathtracer = dynamic_cast<RenderPath3D_PathTracing*>(renderPath.get());
+	if (pathtracer != nullptr)
+	{
+		pathtracer->setTargetSampleCount((int)pathTraceTargetSlider.GetValue());
+
+		std::stringstream ss;
+		ss << "Sample count: " << pathtracer->getCurrentSampleCount() << std::endl;
+		ss << "Trace progress: " << int(pathtracer->getProgress() * 100) << "%" << std::endl;
+		if (pathtracer->isDenoiserAvailable())
+		{
+			if (pathtracer->getDenoiserProgress() > 0)
+			{
+				ss << "Denoiser progress: " << int(pathtracer->getDenoiserProgress() * 100) << "%" << std::endl;
+			}
+		}
+		else
+		{
+			ss << "Denoiser not available" << std::endl;
+		}
+		pathTraceStatisticsLabel.SetText(ss.str());
+	}
 
 	wiProfiler::EndRange(profrange);
 
@@ -1968,16 +2005,16 @@ void EditorComponent::Compose(CommandList cmd) const
 			switch (light.GetType())
 			{
 			case LightComponent::POINT:
-				wiImage::Draw(pointLightTex->texture, fx, cmd);
+				wiImage::Draw(&pointLightTex->texture, fx, cmd);
 				break;
 			case LightComponent::SPOT:
-				wiImage::Draw(spotLightTex->texture, fx, cmd);
+				wiImage::Draw(&spotLightTex->texture, fx, cmd);
 				break;
 			case LightComponent::DIRECTIONAL:
-				wiImage::Draw(dirLightTex->texture, fx, cmd);
+				wiImage::Draw(&dirLightTex->texture, fx, cmd);
 				break;
 			default:
-				wiImage::Draw(areaLightTex->texture, fx, cmd);
+				wiImage::Draw(&areaLightTex->texture, fx, cmd);
 				break;
 			}
 		}
@@ -2012,7 +2049,7 @@ void EditorComponent::Compose(CommandList cmd) const
 			}
 
 
-			wiImage::Draw(decalTex->texture, fx, cmd);
+			wiImage::Draw(&decalTex->texture, fx, cmd);
 
 		}
 	}
@@ -2045,7 +2082,7 @@ void EditorComponent::Compose(CommandList cmd) const
 			}
 
 
-			wiImage::Draw(forceFieldTex->texture, fx, cmd);
+			wiImage::Draw(&forceFieldTex->texture, fx, cmd);
 		}
 	}
 
@@ -2078,7 +2115,7 @@ void EditorComponent::Compose(CommandList cmd) const
 			}
 
 
-			wiImage::Draw(cameraTex->texture, fx, cmd);
+			wiImage::Draw(&cameraTex->texture, fx, cmd);
 		}
 	}
 
@@ -2110,7 +2147,7 @@ void EditorComponent::Compose(CommandList cmd) const
 			}
 
 
-			wiImage::Draw(armatureTex->texture, fx, cmd);
+			wiImage::Draw(&armatureTex->texture, fx, cmd);
 		}
 	}
 
@@ -2142,7 +2179,7 @@ void EditorComponent::Compose(CommandList cmd) const
 			}
 
 
-			wiImage::Draw(emitterTex->texture, fx, cmd);
+			wiImage::Draw(&emitterTex->texture, fx, cmd);
 		}
 	}
 
@@ -2174,7 +2211,7 @@ void EditorComponent::Compose(CommandList cmd) const
 			}
 
 
-			wiImage::Draw(hairTex->texture, fx, cmd);
+			wiImage::Draw(&hairTex->texture, fx, cmd);
 		}
 	}
 
@@ -2206,7 +2243,7 @@ void EditorComponent::Compose(CommandList cmd) const
 			}
 
 
-			wiImage::Draw(soundTex->texture, fx, cmd);
+			wiImage::Draw(&soundTex->texture, fx, cmd);
 		}
 	}
 
@@ -2321,13 +2358,13 @@ void EditorComponent::ClearSelected()
 {
 	translator.selected.clear();
 }
-void EditorComponent::AddSelected(wiECS::Entity entity)
+void EditorComponent::AddSelected(Entity entity)
 {
 	wiScene::PickResult res;
 	res.entity = entity;
 	AddSelected(res);
 }
-void EditorComponent::AddSelected(const wiScene::PickResult& picked)
+void EditorComponent::AddSelected(const PickResult& picked)
 {
 	for (auto it = translator.selected.begin(); it != translator.selected.end(); ++it)
 	{
@@ -2413,7 +2450,7 @@ void EditorComponent::ConsumeHistoryOperation(bool undo)
 			{
 				size_t count;
 				archive >> count;
-				vector<Entity> deletedEntities(count);
+				std::vector<Entity> deletedEntities(count);
 				for (size_t i = 0; i < count; ++i)
 				{
 					archive >> deletedEntities[i];
@@ -2440,7 +2477,7 @@ void EditorComponent::ConsumeHistoryOperation(bool undo)
 			{
 				// Read selections states from archive:
 
-				list<wiScene::PickResult> selectedBEFORE;
+			std::list<wiScene::PickResult> selectedBEFORE;
 				size_t selectionCountBEFORE;
 				archive >> selectionCountBEFORE;
 				for (size_t i = 0; i < selectionCountBEFORE; ++i)
@@ -2455,7 +2492,7 @@ void EditorComponent::ConsumeHistoryOperation(bool undo)
 					selectedBEFORE.push_back(sel);
 				}
 
-				list<wiScene::PickResult> selectedAFTER;
+				std::list<wiScene::PickResult> selectedAFTER;
 				size_t selectionCountAFTER;
 				archive >> selectionCountAFTER;
 				for (size_t i = 0; i < selectionCountAFTER; ++i)

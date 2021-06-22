@@ -16,6 +16,7 @@ public:
 	wiCheckBox softbodyCheckBox;
 	wiSlider massSlider;
 	wiSlider frictionSlider;
+	wiSlider restitutionSlider;
 	wiButton impostorCreateButton;
 	wiSlider impostorDistanceSlider;
 	wiSlider tessellationFactorSlider;
@@ -25,6 +26,7 @@ public:
 	wiButton computeNormalsHardButton;
 	wiButton recenterButton;
 	wiButton recenterToBottomButton;
+	wiButton optimizeButton;
 
 	wiCheckBox terrainCheckBox;
 	wiComboBox terrainMat1Combo;

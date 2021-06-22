@@ -1,22 +1,22 @@
 #pragma once
+#include "CommonInclude.h"
+#include "wiPlatform.h"
 
-#if __has_include("d3d12.h")
+#ifdef _WIN32
 #define WICKEDENGINE_BUILD_DX12
-#endif // HAS DX12
+#endif // _WIN32
 
 #ifdef WICKEDENGINE_BUILD_DX12
-#include "CommonInclude.h"
 #include "wiGraphicsDevice.h"
-#include "wiPlatform.h"
-#include "wiSpinLock.h"
-#include "wiContainers.h"
 #include "wiGraphicsDevice_SharedInternals.h"
-
-#include "Utility/D3D12MemAlloc.h"
+#include "wiMath.h"
 
 #include <dxgi1_6.h>
-#include <d3d12.h>
 #include <wrl/client.h> // ComPtr
+
+#include "Utility/dx12/d3d12.h"
+#define D3D12MA_D3D12_HEADERS_ALREADY_INCLUDED
+#include "Utility/D3D12MemAlloc.h"
 
 #include <unordered_map>
 #include <deque>
@@ -28,30 +28,15 @@ namespace wiGraphics
 {
 	class GraphicsDevice_DX12 : public GraphicsDevice
 	{
-	private:
+	protected:
 		Microsoft::WRL::ComPtr<ID3D12Device5> device;
 		Microsoft::WRL::ComPtr<IDXGIAdapter4> adapter;
 		Microsoft::WRL::ComPtr<IDXGIFactory6> factory;
-		Microsoft::WRL::ComPtr<ID3D12CommandQueue> directQueue;
-		Microsoft::WRL::ComPtr<ID3D12Fence> frameFence;
-		HANDLE frameFenceEvent;
-
-		uint32_t backbuffer_index = 0;
-		Microsoft::WRL::ComPtr<ID3D12Resource> backBuffers[BACKBUFFER_COUNT];
 
 		Microsoft::WRL::ComPtr<ID3D12CommandSignature> dispatchIndirectCommandSignature;
 		Microsoft::WRL::ComPtr<ID3D12CommandSignature> drawInstancedIndirectCommandSignature;
 		Microsoft::WRL::ComPtr<ID3D12CommandSignature> drawIndexedInstancedIndirectCommandSignature;
 		Microsoft::WRL::ComPtr<ID3D12CommandSignature> dispatchMeshIndirectCommandSignature;
-
-		Microsoft::WRL::ComPtr<ID3D12QueryHeap> querypool_timestamp;
-		Microsoft::WRL::ComPtr<ID3D12QueryHeap> querypool_occlusion;
-		static const size_t timestamp_query_count = 1024;
-		static const size_t occlusion_query_count = 1024;
-		Microsoft::WRL::ComPtr<ID3D12Resource> querypool_timestamp_readback;
-		Microsoft::WRL::ComPtr<ID3D12Resource> querypool_occlusion_readback;
-		D3D12MA::Allocation* allocation_querypool_timestamp_readback = nullptr;
-		D3D12MA::Allocation* allocation_querypool_occlusion_readback = nullptr;
 
 		D3D12_FEATURE_DATA_D3D12_OPTIONS features_0;
 		D3D12_FEATURE_DATA_D3D12_OPTIONS5 features_5;
@@ -63,65 +48,63 @@ namespace wiGraphics
 		uint32_t resource_descriptor_size = 0;
 		uint32_t sampler_descriptor_size = 0;
 
-		Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> descriptorheap_RTV;
-		Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> descriptorheap_DSV;
+		D3D12_CPU_DESCRIPTOR_HANDLE nullCBV = {};
+		D3D12_CPU_DESCRIPTOR_HANDLE nullSAM = {};
+		D3D12_CPU_DESCRIPTOR_HANDLE nullSRV_buffer = {};
+		D3D12_CPU_DESCRIPTOR_HANDLE nullSRV_texture1d = {};
+		D3D12_CPU_DESCRIPTOR_HANDLE nullSRV_texture1darray = {};
+		D3D12_CPU_DESCRIPTOR_HANDLE nullSRV_texture2d = {};
+		D3D12_CPU_DESCRIPTOR_HANDLE nullSRV_texture2darray = {};
+		D3D12_CPU_DESCRIPTOR_HANDLE nullSRV_texturecube = {};
+		D3D12_CPU_DESCRIPTOR_HANDLE nullSRV_texturecubearray = {};
+		D3D12_CPU_DESCRIPTOR_HANDLE nullSRV_texture3d = {};
+		D3D12_CPU_DESCRIPTOR_HANDLE nullSRV_accelerationstructure = {};
+		D3D12_CPU_DESCRIPTOR_HANDLE nullUAV_buffer = {};
+		D3D12_CPU_DESCRIPTOR_HANDLE nullUAV_texture1d = {};
+		D3D12_CPU_DESCRIPTOR_HANDLE nullUAV_texture1darray = {};
+		D3D12_CPU_DESCRIPTOR_HANDLE nullUAV_texture2d = {};
+		D3D12_CPU_DESCRIPTOR_HANDLE nullUAV_texture2darray = {};
+		D3D12_CPU_DESCRIPTOR_HANDLE nullUAV_texture3d = {};
 
-		D3D12_CPU_DESCRIPTOR_HANDLE rtv_descriptor_heap_start = {};
-		D3D12_CPU_DESCRIPTOR_HANDLE dsv_descriptor_heap_start = {};
+		std::vector<D3D12_STATIC_SAMPLER_DESC> common_samplers;
 
-		Microsoft::WRL::ComPtr<ID3D12CommandQueue> copyQueue;
-		std::mutex copyQueueLock;
-		bool copyQueueUse = false;
-		Microsoft::WRL::ComPtr<ID3D12Fence> copyFence; // GPU only
-		UINT64 copyFenceValue = 0;
+		struct CommandQueue
+		{
+			D3D12_COMMAND_QUEUE_DESC desc = {};
+			Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue;
+			Microsoft::WRL::ComPtr<ID3D12Fence> fence;
+			ID3D12CommandList* submit_cmds[COMMANDLIST_COUNT] = {};
+			uint32_t submit_count = 0;
+		} queues[QUEUE_COUNT];
+
+		struct CopyAllocator
+		{
+			GraphicsDevice_DX12* device = nullptr;
+			Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue;
+			std::mutex locker;
+
+			struct CopyCMD
+			{
+				Microsoft::WRL::ComPtr<ID3D12CommandAllocator> commandAllocator;
+				Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> commandList;
+				Microsoft::WRL::ComPtr<ID3D12Fence> fence;
+				GPUBuffer uploadbuffer;
+				void* data = nullptr;
+				ID3D12Resource* upload_resource = nullptr;
+			};
+			std::vector<CopyCMD> freelist;
+
+			void init(GraphicsDevice_DX12* device);
+			void destroy();
+			CopyCMD allocate(uint32_t staging_size);
+			void submit(CopyCMD cmd);
+		};
+		mutable CopyAllocator copyAllocator;
 
 		struct FrameResources
 		{
-			Microsoft::WRL::ComPtr<ID3D12CommandAllocator> commandAllocators[COMMANDLIST_COUNT];
-			Microsoft::WRL::ComPtr<ID3D12CommandList> commandLists[COMMANDLIST_COUNT];
-
-			Microsoft::WRL::ComPtr<ID3D12CommandAllocator> copyAllocator;
-			Microsoft::WRL::ComPtr<ID3D12CommandList> copyCommandList;
-
-			struct DescriptorTableFrameAllocator
-			{
-				GraphicsDevice_DX12*	device = nullptr;
-				struct DescriptorHeap
-				{
-					D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
-					Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> heap_GPU;
-					D3D12_CPU_DESCRIPTOR_HANDLE start_cpu = {};
-					D3D12_GPU_DESCRIPTOR_HANDLE start_gpu = {};
-					uint32_t ringOffset = 0;
-				};
-				std::vector<DescriptorHeap> heaps_resource;
-				std::vector<DescriptorHeap> heaps_sampler;
-				uint32_t current_resource_heap = 0;
-				uint32_t current_sampler_heap = 0;
-				bool heaps_bound = false;
-				bool dirty = false;
-
-				const GPUBuffer* CBV[GPU_RESOURCE_HEAP_CBV_COUNT];
-				const GPUResource* SRV[GPU_RESOURCE_HEAP_SRV_COUNT];
-				int SRV_index[GPU_RESOURCE_HEAP_SRV_COUNT];
-				const GPUResource* UAV[GPU_RESOURCE_HEAP_UAV_COUNT];
-				int UAV_index[GPU_RESOURCE_HEAP_UAV_COUNT];
-				const Sampler* SAM[GPU_SAMPLER_HEAP_COUNT];
-
-				struct DescriptorHandles
-				{
-					D3D12_GPU_DESCRIPTOR_HANDLE sampler_handle = {};
-					D3D12_GPU_DESCRIPTOR_HANDLE resource_handle = {};
-				};
-
-				void init(GraphicsDevice_DX12* device);
-
-				void reset();
-				void request_heaps(uint32_t resources, uint32_t samplers, CommandList cmd);
-				void validate(bool graphics, CommandList cmd);
-				DescriptorHandles commit(const DescriptorTable* table, CommandList cmd);
-			};
-			DescriptorTableFrameAllocator descriptors[COMMANDLIST_COUNT];
+			Microsoft::WRL::ComPtr<ID3D12Fence> fence[QUEUE_COUNT];
+			Microsoft::WRL::ComPtr<ID3D12CommandAllocator> commandAllocators[COMMANDLIST_COUNT][QUEUE_COUNT];
 
 			struct ResourceFrameAllocator
 			{
@@ -139,13 +122,57 @@ namespace wiGraphics
 			};
 			ResourceFrameAllocator resourceBuffer[COMMANDLIST_COUNT];
 		};
-		FrameResources frames[BACKBUFFER_COUNT];
-		FrameResources& GetFrameResources() { return frames[GetFrameCount() % BACKBUFFER_COUNT]; }
-		inline ID3D12GraphicsCommandList6* GetDirectCommandList(CommandList cmd) { return static_cast<ID3D12GraphicsCommandList6*>(GetFrameResources().commandLists[cmd].Get()); }
+		FrameResources frames[BUFFERCOUNT];
+		FrameResources& GetFrameResources() { return frames[GetFrameCount() % BUFFERCOUNT]; }
 
-		Microsoft::WRL::ComPtr<IDXGISwapChain3> swapChain;
+		struct CommandListMetadata
+		{
+			QUEUE_TYPE queue = {};
+			std::vector<CommandList> waits;
+		} cmd_meta[COMMANDLIST_COUNT];
+
+		Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList4> commandLists[COMMANDLIST_COUNT][QUEUE_COUNT];
+		inline ID3D12GraphicsCommandList6* GetCommandList(CommandList cmd)
+		{
+			return (ID3D12GraphicsCommandList6*)commandLists[cmd][cmd_meta[cmd].queue].Get();
+		}
+
+		struct DescriptorBinder
+		{
+			GraphicsDevice_DX12* device = nullptr;
+			uint32_t ringOffset_res = 0;
+			uint32_t ringOffset_sam = 0;
+			bool dirty_res = false;
+			bool dirty_sam = false;
+
+			const GPUBuffer* CBV[GPU_RESOURCE_HEAP_CBV_COUNT];
+			const GPUResource* SRV[GPU_RESOURCE_HEAP_SRV_COUNT];
+			int SRV_index[GPU_RESOURCE_HEAP_SRV_COUNT];
+			const GPUResource* UAV[GPU_RESOURCE_HEAP_UAV_COUNT];
+			int UAV_index[GPU_RESOURCE_HEAP_UAV_COUNT];
+			const Sampler* SAM[GPU_SAMPLER_HEAP_COUNT];
+
+			uint32_t dirty_root_cbvs_gfx = 0; // bitmask
+			uint32_t dirty_root_cbvs_compute = 0; // bitmask
+
+			struct DescriptorHandles
+			{
+				D3D12_GPU_DESCRIPTOR_HANDLE sampler_handle = {};
+				D3D12_GPU_DESCRIPTOR_HANDLE resource_handle = {};
+			};
+
+			void init(GraphicsDevice_DX12* device);
+			void reset();
+			void flush(bool graphics, CommandList cmd);
+		};
+		DescriptorBinder descriptors[COMMANDLIST_COUNT];
+
+		std::vector<D3D12_RESOURCE_BARRIER> frame_barriers[COMMANDLIST_COUNT];
 
 		PRIMITIVETOPOLOGY prev_pt[COMMANDLIST_COUNT] = {};
+
+		mutable std::unordered_map<size_t, Microsoft::WRL::ComPtr<ID3D12RootSignature>> rootsignature_cache;
+		mutable std::mutex rootsignature_cache_mutex;
 
 		std::unordered_map<size_t, Microsoft::WRL::ComPtr<ID3D12PipelineState>> pipelines_global;
 		std::vector<std::pair<size_t, Microsoft::WRL::ComPtr<ID3D12PipelineState>>> pipelines_worker[COMMANDLIST_COUNT];
@@ -153,74 +180,85 @@ namespace wiGraphics
 		const PipelineState* active_pso[COMMANDLIST_COUNT] = {};
 		const Shader* active_cs[COMMANDLIST_COUNT] = {};
 		const RaytracingPipelineState* active_rt[COMMANDLIST_COUNT] = {};
-		const RootSignature* active_rootsig_graphics[COMMANDLIST_COUNT] = {};
-		const RootSignature* active_rootsig_compute[COMMANDLIST_COUNT] = {};
+		const ID3D12RootSignature* active_rootsig_graphics[COMMANDLIST_COUNT] = {};
+		const ID3D12RootSignature* active_rootsig_compute[COMMANDLIST_COUNT] = {};
 		const RenderPass* active_renderpass[COMMANDLIST_COUNT] = {};
-		D3D12_RENDER_PASS_ENDING_ACCESS_RESOLVE_SUBRESOURCE_PARAMETERS resolve_subresources[COMMANDLIST_COUNT][D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
 		SHADING_RATE prev_shadingrate[COMMANDLIST_COUNT] = {};
+		std::vector<const SwapChain*> swapchains[COMMANDLIST_COUNT];
+		Microsoft::WRL::ComPtr<ID3D12Resource> active_backbuffer[COMMANDLIST_COUNT];
+
+		struct DeferredPushConstantData
+		{
+			uint8_t data[128];
+			uint32_t size;
+		};
+		DeferredPushConstantData pushconstants[COMMANDLIST_COUNT] = {};
 
 		bool dirty_pso[COMMANDLIST_COUNT] = {};
 		void pso_validate(CommandList cmd);
 
+		void query_flush(CommandList cmd);
+		void barrier_flush(CommandList cmd);
 		void predraw(CommandList cmd);
 		void predispatch(CommandList cmd);
-		void preraytrace(CommandList cmd);
 
-		struct Query_Resolve
+		struct QueryResolver
 		{
-			GPU_QUERY_TYPE type;
-			UINT index;
+			const GPUQueryHeap* heap = nullptr;
+			uint32_t index = 0;
+			uint32_t count = 0;
 		};
-		std::vector<Query_Resolve> query_resolves[COMMANDLIST_COUNT] = {};
+		std::vector<QueryResolver> query_resolves[COMMANDLIST_COUNT];
 
 		std::atomic<CommandList> cmd_count{ 0 };
 
 	public:
-		GraphicsDevice_DX12(wiPlatform::window_type window, bool fullscreen = false, bool debuglayer = false);
+		GraphicsDevice_DX12(bool debuglayer = false, bool gpuvalidation = false);
 		virtual ~GraphicsDevice_DX12();
 
-		bool CreateBuffer(const GPUBufferDesc *pDesc, const SubresourceData* pInitialData, GPUBuffer *pBuffer) override;
-		bool CreateTexture(const TextureDesc* pDesc, const SubresourceData *pInitialData, Texture *pTexture) override;
-		bool CreateShader(SHADERSTAGE stage, const void *pShaderBytecode, size_t BytecodeLength, Shader *pShader) override;
-		bool CreateSampler(const SamplerDesc *pSamplerDesc, Sampler *pSamplerState) override;
-		bool CreateQuery(const GPUQueryDesc *pDesc, GPUQuery *pQuery) override;
-		bool CreatePipelineState(const PipelineStateDesc* pDesc, PipelineState* pso) override;
-		bool CreateRenderPass(const RenderPassDesc* pDesc, RenderPass* renderpass) override;
-		bool CreateRaytracingAccelerationStructure(const RaytracingAccelerationStructureDesc* pDesc, RaytracingAccelerationStructure* bvh) override;
-		bool CreateRaytracingPipelineState(const RaytracingPipelineStateDesc* pDesc, RaytracingPipelineState* rtpso) override;
-		bool CreateDescriptorTable(DescriptorTable* table) override;
-		bool CreateRootSignature(RootSignature* rootsig) override;
+		bool CreateSwapChain(const SwapChainDesc* pDesc, wiPlatform::window_type window, SwapChain* swapChain) const override;
+		bool CreateBuffer(const GPUBufferDesc *pDesc, const SubresourceData* pInitialData, GPUBuffer *pBuffer) const override;
+		bool CreateTexture(const TextureDesc* pDesc, const SubresourceData *pInitialData, Texture *pTexture) const override;
+		bool CreateShader(SHADERSTAGE stage, const void *pShaderBytecode, size_t BytecodeLength, Shader *pShader) const override;
+		bool CreateSampler(const SamplerDesc *pSamplerDesc, Sampler *pSamplerState) const override;
+		bool CreateQueryHeap(const GPUQueryHeapDesc* pDesc, GPUQueryHeap* pQueryHeap) const override;
+		bool CreatePipelineState(const PipelineStateDesc* pDesc, PipelineState* pso) const override;
+		bool CreateRenderPass(const RenderPassDesc* pDesc, RenderPass* renderpass) const override;
+		bool CreateRaytracingAccelerationStructure(const RaytracingAccelerationStructureDesc* pDesc, RaytracingAccelerationStructure* bvh) const override;
+		bool CreateRaytracingPipelineState(const RaytracingPipelineStateDesc* pDesc, RaytracingPipelineState* rtpso) const override;
+		
+		int CreateSubresource(Texture* texture, SUBRESOURCE_TYPE type, uint32_t firstSlice, uint32_t sliceCount, uint32_t firstMip, uint32_t mipCount) const override;
+		int CreateSubresource(GPUBuffer* buffer, SUBRESOURCE_TYPE type, uint64_t offset, uint64_t size = ~0) const override;
 
-		int CreateSubresource(Texture* texture, SUBRESOURCE_TYPE type, uint32_t firstSlice, uint32_t sliceCount, uint32_t firstMip, uint32_t mipCount) override;
-		int CreateSubresource(GPUBuffer* buffer, SUBRESOURCE_TYPE type, uint64_t offset, uint64_t size = ~0) override;
+		int GetDescriptorIndex(const GPUResource* resource, SUBRESOURCE_TYPE type, int subresource = -1) const override;
+		int GetDescriptorIndex(const Sampler* sampler) const override;
 
-		void WriteShadingRateValue(SHADING_RATE rate, void* dest) override;
-		void WriteTopLevelAccelerationStructureInstance(const RaytracingAccelerationStructureDesc::TopLevel::Instance* instance, void* dest) override;
-		void WriteShaderIdentifier(const RaytracingPipelineState* rtpso, uint32_t group_index, void* dest) override;
-		void WriteDescriptor(const DescriptorTable* table, uint32_t rangeIndex, uint32_t arrayIndex, const GPUResource* resource, int subresource = -1, uint64_t offset = 0) override;
-		void WriteDescriptor(const DescriptorTable* table, uint32_t rangeIndex, uint32_t arrayIndex, const Sampler* sampler) override;
+		void WriteShadingRateValue(SHADING_RATE rate, void* dest) const override;
+		void WriteTopLevelAccelerationStructureInstance(const RaytracingAccelerationStructureDesc::TopLevel::Instance* instance, void* dest) const override;
+		void WriteShaderIdentifier(const RaytracingPipelineState* rtpso, uint32_t group_index, void* dest) const override;
+		
+		void Map(const GPUResource* resource, Mapping* mapping) const override;
+		void Unmap(const GPUResource* resource) const override;
+		void QueryRead(const GPUQueryHeap* heap, uint32_t index, uint32_t count, uint64_t* results) const override;
 
-		void Map(const GPUResource* resource, Mapping* mapping) override;
-		void Unmap(const GPUResource* resource) override;
-		bool QueryRead(const GPUQuery* query, GPUQueryResult* result) override;
+		void SetCommonSampler(const StaticSampler* sam) override;
 
 		void SetName(GPUResource* pResource, const char* name) override;
 
-		void PresentBegin(CommandList cmd) override;
-		void PresentEnd(CommandList cmd) override;
-
-		CommandList BeginCommandList() override;
+		CommandList BeginCommandList(QUEUE_TYPE queue = QUEUE_GRAPHICS) override;
 		void SubmitCommandLists() override;
 
-		void WaitForGPU() override;
+		void WaitForGPU() const override;
 		void ClearPipelineStateCache() override;
 
-		void SetResolution(int width, int height) override;
+		SHADERFORMAT GetShaderFormat() const override { return SHADERFORMAT_HLSL6; }
 
-		Texture GetBackBuffer() override;
+		Texture GetBackBuffer(const SwapChain* swapchain) const override;
 
 		///////////////Thread-sensitive////////////////////////
 
+		void WaitCommandList(CommandList cmd, CommandList wait_for) override;
+		void RenderPassBegin(const SwapChain* swapchain, CommandList cmd) override;
 		void RenderPassBegin(const RenderPass* renderpass, CommandList cmd) override;
 		void RenderPassEnd(CommandList cmd) override;
 		void BindScissorRects(uint32_t numRects, const Rect* rects, CommandList cmd) override;
@@ -252,16 +290,14 @@ namespace wiGraphics
 		void DispatchMeshIndirect(const GPUBuffer* args, uint32_t args_offset, CommandList cmd) override;
 		void CopyResource(const GPUResource* pDst, const GPUResource* pSrc, CommandList cmd) override;
 		void UpdateBuffer(const GPUBuffer* buffer, const void* data, CommandList cmd, int dataSize = -1) override;
-		void QueryBegin(const GPUQuery *query, CommandList cmd) override;
-		void QueryEnd(const GPUQuery *query, CommandList cmd) override;
+		void QueryBegin(const GPUQueryHeap* heap, uint32_t index, CommandList cmd) override;
+		void QueryEnd(const GPUQueryHeap* heap, uint32_t index, CommandList cmd) override;
+		void QueryResolve(const GPUQueryHeap* heap, uint32_t index, uint32_t count, CommandList cmd) override;
 		void Barrier(const GPUBarrier* barriers, uint32_t numBarriers, CommandList cmd) override;
 		void BuildRaytracingAccelerationStructure(const RaytracingAccelerationStructure* dst, CommandList cmd, const RaytracingAccelerationStructure* src = nullptr) override;
 		void BindRaytracingPipelineState(const RaytracingPipelineState* rtpso, CommandList cmd) override;
 		void DispatchRays(const DispatchRaysDesc* desc, CommandList cmd) override;
-
-		void BindDescriptorTable(BINDPOINT bindpoint, uint32_t space, const DescriptorTable* table, CommandList cmd) override;
-		void BindRootDescriptor(BINDPOINT bindpoint, uint32_t index, const GPUBuffer* buffer, uint32_t offset, CommandList cmd) override;
-		void BindRootConstants(BINDPOINT bindpoint, uint32_t index, const void* srcdata, CommandList cmd) override;
+		void PushConstants(const void* data, uint32_t size, CommandList cmd) override;
 
 		GPUAllocation AllocateGPU(size_t dataSize, CommandList cmd) override;
 
@@ -270,23 +306,98 @@ namespace wiGraphics
 		void SetMarker(const char* name, CommandList cmd) override;
 
 
+
+		struct DescriptorHeap
+		{
+			D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
+			Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> heap_GPU;
+			D3D12_CPU_DESCRIPTOR_HANDLE start_cpu = {};
+			D3D12_GPU_DESCRIPTOR_HANDLE start_gpu = {};
+
+			// CPU status:
+			std::atomic<uint64_t> allocationOffset{ 0 };
+
+			// GPU status:
+			Microsoft::WRL::ComPtr<ID3D12Fence> fence;
+			uint64_t fenceValue = 0;
+			uint64_t cached_completedValue = 0;
+		};
+		DescriptorHeap descriptorheap_res;
+		DescriptorHeap descriptorheap_sam;
+
 		struct AllocationHandler
 		{
 			D3D12MA::Allocator* allocator = nullptr;
 			Microsoft::WRL::ComPtr<ID3D12Device> device;
 			uint64_t framecount = 0;
 			std::mutex destroylocker;
+
+			struct DescriptorAllocator
+			{
+				GraphicsDevice_DX12* device = nullptr;
+				std::mutex locker;
+				D3D12_DESCRIPTOR_HEAP_DESC desc = {};
+				std::vector<Microsoft::WRL::ComPtr<ID3D12DescriptorHeap>> heaps;
+				uint32_t descriptor_size = 0;
+				std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> freelist;
+
+				void init(GraphicsDevice_DX12* device, D3D12_DESCRIPTOR_HEAP_TYPE type)
+				{
+					this->device = device;
+					desc.Type = type;
+					desc.NumDescriptors = 1024;
+					descriptor_size = device->device->GetDescriptorHandleIncrementSize(type);
+				}
+				void block_allocate()
+				{
+					heaps.emplace_back();
+					HRESULT hr = device->device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&heaps.back()));
+					assert(SUCCEEDED(hr));
+					D3D12_CPU_DESCRIPTOR_HANDLE heap_start = heaps.back()->GetCPUDescriptorHandleForHeapStart();
+					for (UINT i = 0; i < desc.NumDescriptors; ++i)
+					{
+						D3D12_CPU_DESCRIPTOR_HANDLE handle = heap_start;
+						handle.ptr += i * descriptor_size;
+						freelist.push_back(handle);
+					}
+				}
+				D3D12_CPU_DESCRIPTOR_HANDLE allocate()
+				{
+					locker.lock();
+					if (freelist.empty())
+					{
+						block_allocate();
+					}
+					assert(!freelist.empty());
+					D3D12_CPU_DESCRIPTOR_HANDLE handle = freelist.back();
+					freelist.pop_back();
+					locker.unlock();
+					return handle;
+				}
+				void free(D3D12_CPU_DESCRIPTOR_HANDLE index)
+				{
+					locker.lock();
+					freelist.push_back(index);
+					locker.unlock();
+				}
+			};
+			DescriptorAllocator descriptors_res;
+			DescriptorAllocator descriptors_sam;
+			DescriptorAllocator descriptors_rtv;
+			DescriptorAllocator descriptors_dsv;
+
+			std::vector<int> free_bindless_res;
+			std::vector<int> free_bindless_sam;
+
 			std::deque<std::pair<D3D12MA::Allocation*, uint64_t>> destroyer_allocations;
 			std::deque<std::pair<Microsoft::WRL::ComPtr<ID3D12Resource>, uint64_t>> destroyer_resources;
-			std::deque<std::pair<uint32_t, uint64_t>> destroyer_queries_timestamp;
-			std::deque<std::pair<uint32_t, uint64_t>> destroyer_queries_occlusion;
+			std::deque<std::pair<Microsoft::WRL::ComPtr<ID3D12QueryHeap>, uint64_t>> destroyer_queryheaps;
 			std::deque<std::pair<Microsoft::WRL::ComPtr<ID3D12PipelineState>, uint64_t>> destroyer_pipelines;
 			std::deque<std::pair<Microsoft::WRL::ComPtr<ID3D12RootSignature>, uint64_t>> destroyer_rootSignatures;
 			std::deque<std::pair<Microsoft::WRL::ComPtr<ID3D12StateObject>, uint64_t>> destroyer_stateobjects;
 			std::deque<std::pair<Microsoft::WRL::ComPtr<ID3D12DescriptorHeap>, uint64_t>> destroyer_descriptorHeaps;
-
-			wiContainers::ThreadSafeRingBuffer<uint32_t, timestamp_query_count> free_timestampqueries;
-			wiContainers::ThreadSafeRingBuffer<uint32_t, occlusion_query_count> free_occlusionqueries;
+			std::deque<std::pair<int, uint64_t>> destroyer_bindless_res;
+			std::deque<std::pair<int, uint64_t>> destroyer_bindless_sam;
 
 			~AllocationHandler()
 			{
@@ -295,13 +406,13 @@ namespace wiGraphics
 			}
 
 			// Deferred destroy of resources that the GPU is already finished with:
-			void Update(uint64_t FRAMECOUNT, uint32_t BACKBUFFER_COUNT)
+			void Update(uint64_t FRAMECOUNT, uint32_t BUFFERCOUNT)
 			{
 				destroylocker.lock();
 				framecount = FRAMECOUNT;
 				while (!destroyer_allocations.empty())
 				{
-					if (destroyer_allocations.front().second + BACKBUFFER_COUNT < FRAMECOUNT)
+					if (destroyer_allocations.front().second + BUFFERCOUNT < FRAMECOUNT)
 					{
 						auto item = destroyer_allocations.front();
 						destroyer_allocations.pop_front();
@@ -314,7 +425,7 @@ namespace wiGraphics
 				}
 				while (!destroyer_resources.empty())
 				{
-					if (destroyer_resources.front().second + BACKBUFFER_COUNT < FRAMECOUNT)
+					if (destroyer_resources.front().second + BUFFERCOUNT < FRAMECOUNT)
 					{
 						destroyer_resources.pop_front();
 						// comptr auto delete
@@ -324,26 +435,12 @@ namespace wiGraphics
 						break;
 					}
 				}
-				while (!destroyer_queries_occlusion.empty())
+				while (!destroyer_queryheaps.empty())
 				{
-					if (destroyer_queries_occlusion.front().second + BACKBUFFER_COUNT < FRAMECOUNT)
+					if (destroyer_queryheaps.front().second + BUFFERCOUNT < FRAMECOUNT)
 					{
-						auto item = destroyer_queries_occlusion.front();
-						destroyer_queries_occlusion.pop_front();
-						free_occlusionqueries.push_back(item.first);
-					}
-					else
-					{
-						break;
-					}
-				}
-				while (!destroyer_queries_timestamp.empty())
-				{
-					if (destroyer_queries_timestamp.front().second + BACKBUFFER_COUNT < FRAMECOUNT)
-					{
-						auto item = destroyer_queries_timestamp.front();
-						destroyer_queries_timestamp.pop_front();
-						free_timestampqueries.push_back(item.first);
+						destroyer_queryheaps.pop_front();
+						// comptr auto delete
 					}
 					else
 					{
@@ -352,7 +449,7 @@ namespace wiGraphics
 				}
 				while (!destroyer_pipelines.empty())
 				{
-					if (destroyer_pipelines.front().second + BACKBUFFER_COUNT < FRAMECOUNT)
+					if (destroyer_pipelines.front().second + BUFFERCOUNT < FRAMECOUNT)
 					{
 						destroyer_pipelines.pop_front();
 						// comptr auto delete
@@ -364,7 +461,7 @@ namespace wiGraphics
 				}
 				while (!destroyer_rootSignatures.empty())
 				{
-					if (destroyer_rootSignatures.front().second + BACKBUFFER_COUNT < FRAMECOUNT)
+					if (destroyer_rootSignatures.front().second + BUFFERCOUNT < FRAMECOUNT)
 					{
 						destroyer_rootSignatures.pop_front();
 						// comptr auto delete
@@ -376,7 +473,7 @@ namespace wiGraphics
 				}
 				while (!destroyer_stateobjects.empty())
 				{
-					if (destroyer_stateobjects.front().second + BACKBUFFER_COUNT < FRAMECOUNT)
+					if (destroyer_stateobjects.front().second + BUFFERCOUNT < FRAMECOUNT)
 					{
 						destroyer_stateobjects.pop_front();
 						// comptr auto delete
@@ -388,10 +485,36 @@ namespace wiGraphics
 				}
 				while (!destroyer_descriptorHeaps.empty())
 				{
-					if (destroyer_descriptorHeaps.front().second + BACKBUFFER_COUNT < FRAMECOUNT)
+					if (destroyer_descriptorHeaps.front().second + BUFFERCOUNT < FRAMECOUNT)
 					{
 						destroyer_descriptorHeaps.pop_front();
 						// comptr auto delete
+					}
+					else
+					{
+						break;
+					}
+				}
+				while (!destroyer_bindless_res.empty())
+				{
+					if (destroyer_bindless_res.front().second + BUFFERCOUNT < FRAMECOUNT)
+					{
+						int index = destroyer_bindless_res.front().first;
+						destroyer_bindless_res.pop_front();
+						free_bindless_res.push_back(index);
+					}
+					else
+					{
+						break;
+					}
+				}
+				while (!destroyer_bindless_sam.empty())
+				{
+					if (destroyer_bindless_sam.front().second + BUFFERCOUNT < FRAMECOUNT)
+					{
+						int index = destroyer_bindless_sam.front().first;
+						destroyer_bindless_sam.pop_front();
+						free_bindless_sam.push_back(index);
 					}
 					else
 					{

@@ -2,6 +2,7 @@
 #include "RendererWindow.h"
 #include "RenderPath3D.h"
 #include "Editor.h"
+#include "wiPhysicsEngine.h"
 
 
 void RendererWindow::Create(EditorComponent* editor)
@@ -21,10 +22,10 @@ void RendererWindow::Create(EditorComponent* editor)
 	vsyncCheckBox.SetScriptTip("SetVSyncEnabled(opt bool enabled)");
 	vsyncCheckBox.SetPos(XMFLOAT2(x, y += step));
 	vsyncCheckBox.SetSize(XMFLOAT2(itemheight, itemheight));
-	vsyncCheckBox.OnClick([](wiEventArgs args) {
-		wiRenderer::GetDevice()->SetVSyncEnabled(args.bValue);
+	vsyncCheckBox.OnClick([=](wiEventArgs args) {
+		wiEvent::SetVSync(args.bValue);
 	});
-	vsyncCheckBox.SetCheck(wiRenderer::GetDevice()->GetVSyncEnabled());
+	vsyncCheckBox.SetCheck(editor->main->swapChain.desc.vsync);
 	AddWidget(&vsyncCheckBox);
 
 	occlusionCullingCheckBox.Create("Occlusion Culling: ");
@@ -47,7 +48,6 @@ void RendererWindow::Create(EditorComponent* editor)
 		if (editor->resolutionScale != args.fValue)
 		{
 			editor->renderPath->resolutionScale = args.fValue;
-			editor->renderPath->ResizeBuffers();
 			editor->resolutionScale = args.fValue;
 			editor->ResizeBuffers();
 		}
@@ -249,7 +249,7 @@ void RendererWindow::Create(EditorComponent* editor)
 		}
 		});
 	shadowTypeComboBox.SetSelected(0);
-	shadowTypeComboBox.SetTooltip("Choose between shadowmaps and ray traced shadows (if available).\n(ray traced shadows experimental, needs hardware support and shaders compiled with HLSL6.5)");
+	shadowTypeComboBox.SetTooltip("Choose between shadowmaps and ray traced shadows (if available).\n(ray traced shadows need hardware raytracing support)");
 	AddWidget(&shadowTypeComboBox);
 
 	shadowProps2DComboBox.Create("2D Shadowmap resolution: ");
@@ -370,20 +370,6 @@ void RendererWindow::Create(EditorComponent* editor)
 	MSAAComboBox.SetTooltip("Multisampling Anti Aliasing quality. ");
 	AddWidget(&MSAAComboBox);
 
-	raytracedShadowsSlider.Create(1, 16, 1, 15, "Raytraced Shadow Quality: ");
-	raytracedShadowsSlider.SetTooltip("Sample count of raytraced shadows (per light). Higher numbers increase quality, but reduce performance.\nTip: Temporal AA will also help to improve quality.");
-	raytracedShadowsSlider.SetSize(XMFLOAT2(100, itemheight));
-	raytracedShadowsSlider.SetPos(XMFLOAT2(x, y += step));
-	raytracedShadowsSlider.SetValue((float)wiRenderer::GetRaytracedShadowsSampleCount());
-	raytracedShadowsSlider.OnSlide([&](wiEventArgs args) {
-		wiRenderer::SetRaytracedShadowsSampleCount((uint32_t)args.iValue);
-		});
-	AddWidget(&raytracedShadowsSlider);
-	if (!wiRenderer::GetDevice()->CheckCapability(wiGraphics::GRAPHICSDEVICE_CAPABILITY_RAYTRACING_INLINE))
-	{
-		raytracedShadowsSlider.SetEnabled(false);
-	}
-
 	temporalAACheckBox.Create("Temporal AA: ");
 	temporalAACheckBox.SetTooltip("Toggle Temporal Anti Aliasing. It is a supersampling techique which is performed across multiple frames.");
 	temporalAACheckBox.SetPos(XMFLOAT2(x, y += step));
@@ -433,7 +419,7 @@ void RendererWindow::Create(EditorComponent* editor)
 			break;
 		}
 
-		wiRenderer::ModifySampler(desc, SSLOT_OBJECTSHADER);
+		wiRenderer::ModifyObjectSampler(desc);
 
 	});
 	textureQualityComboBox.SetSelected(3);
@@ -447,7 +433,7 @@ void RendererWindow::Create(EditorComponent* editor)
 	mipLodBiasSlider.OnSlide([&](wiEventArgs args) {
 		wiGraphics::SamplerDesc desc = wiRenderer::GetSampler(SSLOT_OBJECTSHADER)->GetDesc();
 		desc.MipLODBias = wiMath::Clamp(args.fValue, -15.9f, 15.9f);
-		wiRenderer::ModifySampler(desc, SSLOT_OBJECTSHADER);
+		wiRenderer::ModifyObjectSampler(desc);
 	});
 	AddWidget(&mipLodBiasSlider);
 
@@ -466,8 +452,18 @@ void RendererWindow::Create(EditorComponent* editor)
 	// Visualizer toggles:
 	x = 540, y = 5;
 
+	physicsDebugCheckBox.Create("Physics visualizer: ");
+	physicsDebugCheckBox.SetTooltip("Visualize the physics world");
+	physicsDebugCheckBox.SetPos(XMFLOAT2(x, y += step));
+	physicsDebugCheckBox.SetSize(XMFLOAT2(itemheight, itemheight));
+	physicsDebugCheckBox.OnClick([](wiEventArgs args) {
+		wiPhysicsEngine::SetDebugDrawEnabled(args.bValue);
+		});
+	physicsDebugCheckBox.SetCheck(wiPhysicsEngine::IsDebugDrawEnabled());
+	AddWidget(&physicsDebugCheckBox);
+
 	partitionBoxesCheckBox.Create("SPTree visualizer: ");
-	partitionBoxesCheckBox.SetTooltip("Visualize the world space partitioning tree as boxes");
+	partitionBoxesCheckBox.SetTooltip("Visualize the scene bounding boxes");
 	partitionBoxesCheckBox.SetScriptTip("SetDebugPartitionTreeEnabled(bool enabled)");
 	partitionBoxesCheckBox.SetPos(XMFLOAT2(x, y += step));
 	partitionBoxesCheckBox.SetSize(XMFLOAT2(itemheight, itemheight));

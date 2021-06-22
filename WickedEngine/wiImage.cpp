@@ -2,15 +2,14 @@
 #include "wiResourceManager.h"
 #include "wiRenderer.h"
 #include "wiHelper.h"
-#include "SamplerMapping.h"
-#include "ResourceMapping.h"
-#include "ShaderInterop_Image.h"
+#include "shaders/SamplerMapping.h"
+#include "shaders/ResourceMapping.h"
+#include "shaders/ShaderInterop_Image.h"
 #include "wiBackLog.h"
 #include "wiEvent.h"
 
 #include <atomic>
 
-using namespace std;
 using namespace wiGraphics;
 
 namespace wiImage
@@ -21,8 +20,8 @@ namespace wiImage
 		IMAGE_SHADER_STANDARD,
 		IMAGE_SHADER_SEPARATENORMALMAP,
 		IMAGE_SHADER_MASKED,
-		IMAGE_SHADER_BACKGROUNDBLUR,
-		IMAGE_SHADER_BACKGROUNDBLUR_MASKED,
+		IMAGE_SHADER_BACKGROUND,
+		IMAGE_SHADER_BACKGROUND_MASKED,
 		IMAGE_SHADER_FULLSCREEN,
 		IMAGE_SHADER_COUNT
 	};
@@ -35,9 +34,20 @@ namespace wiImage
 	RasterizerState			rasterizerState;
 	DepthStencilState		depthStencilStates[STENCILMODE_COUNT][STENCILREFMODE_COUNT];
 	PipelineState			imagePSO[IMAGE_SHADER_COUNT][BLENDMODE_COUNT][STENCILMODE_COUNT][STENCILREFMODE_COUNT];
+	Texture					backgroundTextures[COMMANDLIST_COUNT];
+	wiCanvas				canvases[COMMANDLIST_COUNT];
 
 	std::atomic_bool initialized{ false };
 
+	void SetBackground(const Texture& texture, CommandList cmd)
+	{
+		backgroundTextures[cmd] = texture;
+	}
+
+	void SetCanvas(const wiCanvas& canvas, wiGraphics::CommandList cmd)
+	{
+		canvases[cmd] = canvas;
+	}
 
 	void Draw(const Texture* texture, const wiImageParams& params, CommandList cmd)
 	{
@@ -49,8 +59,6 @@ namespace wiImage
 		GraphicsDevice* device = wiRenderer::GetDevice();
 		device->EventBegin("Image", cmd);
 
-		device->BindResource(PS, texture, TEXSLOT_IMAGE_BASE, cmd);
-
 		uint32_t stencilRef = params.stencilRef;
 		if (params.stencilRefMode == STENCILREFMODE_USER)
 		{
@@ -58,32 +66,51 @@ namespace wiImage
 		}
 		device->BindStencilRef(stencilRef, cmd);
 
+		const Sampler* sampler = wiRenderer::GetSampler(SSLOT_LINEAR_CLAMP);
+
 		if (params.quality == QUALITY_NEAREST)
 		{
 			if (params.sampleFlag == SAMPLEMODE_MIRROR)
-				device->BindSampler(PS, wiRenderer::GetSampler(SSLOT_POINT_MIRROR), SSLOT_ONDEMAND0, cmd);
+				sampler = wiRenderer::GetSampler(SSLOT_POINT_MIRROR);
 			else if (params.sampleFlag == SAMPLEMODE_WRAP)
-				device->BindSampler(PS, wiRenderer::GetSampler(SSLOT_POINT_WRAP), SSLOT_ONDEMAND0, cmd);
+				sampler = wiRenderer::GetSampler(SSLOT_POINT_WRAP);
 			else if (params.sampleFlag == SAMPLEMODE_CLAMP)
-				device->BindSampler(PS, wiRenderer::GetSampler(SSLOT_POINT_CLAMP), SSLOT_ONDEMAND0, cmd);
+				sampler = wiRenderer::GetSampler(SSLOT_POINT_CLAMP);
 		}
 		else if (params.quality == QUALITY_LINEAR)
 		{
 			if (params.sampleFlag == SAMPLEMODE_MIRROR)
-				device->BindSampler(PS, wiRenderer::GetSampler(SSLOT_LINEAR_MIRROR), SSLOT_ONDEMAND0, cmd);
+				sampler = wiRenderer::GetSampler(SSLOT_LINEAR_MIRROR);
 			else if (params.sampleFlag == SAMPLEMODE_WRAP)
-				device->BindSampler(PS, wiRenderer::GetSampler(SSLOT_LINEAR_WRAP), SSLOT_ONDEMAND0, cmd);
+				sampler = wiRenderer::GetSampler(SSLOT_LINEAR_WRAP);
 			else if (params.sampleFlag == SAMPLEMODE_CLAMP)
-				device->BindSampler(PS, wiRenderer::GetSampler(SSLOT_LINEAR_CLAMP), SSLOT_ONDEMAND0, cmd);
+				sampler = wiRenderer::GetSampler(SSLOT_LINEAR_CLAMP);
 		}
 		else if (params.quality == QUALITY_ANISOTROPIC)
 		{
 			if (params.sampleFlag == SAMPLEMODE_MIRROR)
-				device->BindSampler(PS, wiRenderer::GetSampler(SSLOT_ANISO_MIRROR), SSLOT_ONDEMAND0, cmd);
+				sampler = wiRenderer::GetSampler(SSLOT_ANISO_MIRROR);
 			else if (params.sampleFlag == SAMPLEMODE_WRAP)
-				device->BindSampler(PS, wiRenderer::GetSampler(SSLOT_ANISO_WRAP), SSLOT_ONDEMAND0, cmd);
+				sampler = wiRenderer::GetSampler(SSLOT_ANISO_WRAP);
 			else if (params.sampleFlag == SAMPLEMODE_CLAMP)
-				device->BindSampler(PS, wiRenderer::GetSampler(SSLOT_ANISO_CLAMP), SSLOT_ONDEMAND0, cmd);
+				sampler = wiRenderer::GetSampler(SSLOT_ANISO_CLAMP);
+		}
+
+		if (device->CheckCapability(GRAPHICSDEVICE_CAPABILITY_BINDLESS_DESCRIPTORS))
+		{
+			PushConstantsImage push;
+			push.texture_base_index = device->GetDescriptorIndex(texture, SRV);
+			push.texture_mask_index = device->GetDescriptorIndex(params.maskMap, SRV);
+			push.texture_background_index = device->GetDescriptorIndex(&backgroundTextures[cmd], SRV);
+			push.sampler_index = device->GetDescriptorIndex(sampler);
+			device->PushConstants(&push, sizeof(push), cmd);
+		}
+		else
+		{
+			device->BindResource(PS, texture, TEXSLOT_IMAGE_BASE, cmd);
+			device->BindResource(PS, params.maskMap, TEXSLOT_IMAGE_MASK, cmd);
+			device->BindResource(PS, &backgroundTextures[cmd], TEXSLOT_IMAGE_BACKGROUND, cmd);
+			device->BindSampler(PS, sampler, SSLOT_ONDEMAND0, cmd);
 		}
 
 		ImageCB cb;
@@ -121,7 +148,13 @@ namespace wiImage
 		}
 		else
 		{
-			M = M * device->GetScreenProjection();
+			const wiCanvas& canvas = canvases[cmd];
+			// Asserts will check that a proper canvas was set for this cmd with wiImage::SetCanvas()
+			//	The canvas must be set to have dpi aware rendering
+			assert(canvas.width > 0);
+			assert(canvas.height > 0);
+			assert(canvas.dpi > 0);
+			M = M * canvas.GetProjection();
 		}
 
 		for (int i = 0; i < 4; ++i)
@@ -175,7 +208,7 @@ namespace wiImage
 		IMAGE_SHADER targetShader;
 		const bool NormalmapSeparate = params.isExtractNormalMapEnabled();
 		const bool Mask = params.maskMap != nullptr;
-		const bool background_blur = params.isBackgroundBlurEnabled();
+		const bool background_blur = params.isBackgroundEnabled();
 		if (NormalmapSeparate)
 		{
 			targetShader = IMAGE_SHADER_SEPARATENORMALMAP;
@@ -186,7 +219,7 @@ namespace wiImage
 			{
 				if (background_blur)
 				{
-					targetShader = IMAGE_SHADER_BACKGROUNDBLUR_MASKED;
+					targetShader = IMAGE_SHADER_BACKGROUND_MASKED;
 				}
 				else
 				{
@@ -197,7 +230,7 @@ namespace wiImage
 			{
 				if (background_blur)
 				{
-					targetShader = IMAGE_SHADER_BACKGROUNDBLUR;
+					targetShader = IMAGE_SHADER_BACKGROUND;
 				}
 				else
 				{
@@ -210,8 +243,6 @@ namespace wiImage
 
 		device->BindConstantBuffer(VS, &constantBuffer, CB_GETBINDSLOT(ImageCB), cmd);
 		device->BindConstantBuffer(PS, &constantBuffer, CB_GETBINDSLOT(ImageCB), cmd);
-
-		device->BindResource(PS, params.maskMap, TEXSLOT_IMAGE_MASK, cmd);
 
 		device->Draw(4, 0, cmd);
 
@@ -229,8 +260,8 @@ namespace wiImage
 		wiRenderer::LoadShader(PS, imagePS[IMAGE_SHADER_STANDARD], "imagePS.cso");
 		wiRenderer::LoadShader(PS, imagePS[IMAGE_SHADER_SEPARATENORMALMAP], "imagePS_separatenormalmap.cso");
 		wiRenderer::LoadShader(PS, imagePS[IMAGE_SHADER_MASKED], "imagePS_masked.cso");
-		wiRenderer::LoadShader(PS, imagePS[IMAGE_SHADER_BACKGROUNDBLUR], "imagePS_backgroundblur.cso");
-		wiRenderer::LoadShader(PS, imagePS[IMAGE_SHADER_BACKGROUNDBLUR_MASKED], "imagePS_backgroundblur_masked.cso");
+		wiRenderer::LoadShader(PS, imagePS[IMAGE_SHADER_BACKGROUND], "imagePS_backgroundblur.cso");
+		wiRenderer::LoadShader(PS, imagePS[IMAGE_SHADER_BACKGROUND_MASKED], "imagePS_backgroundblur_masked.cso");
 		wiRenderer::LoadShader(PS, imagePS[IMAGE_SHADER_FULLSCREEN], "screenPS.cso");
 
 
@@ -392,6 +423,17 @@ namespace wiImage
 		bd.RenderTarget[0].RenderTargetWriteMask = COLOR_WRITE_ENABLE_ALL;
 		bd.IndependentBlendEnable = false;
 		blendStates[BLENDMODE_ADDITIVE] = bd;
+
+		bd.RenderTarget[0].BlendEnable = true;
+		bd.RenderTarget[0].SrcBlend = BLEND_ZERO;
+		bd.RenderTarget[0].DestBlend = BLEND_SRC_COLOR;
+		bd.RenderTarget[0].BlendOp = BLEND_OP_ADD;
+		bd.RenderTarget[0].SrcBlendAlpha = BLEND_ZERO;
+		bd.RenderTarget[0].DestBlendAlpha = BLEND_SRC_ALPHA;
+		bd.RenderTarget[0].BlendOpAlpha = BLEND_OP_ADD;
+		bd.RenderTarget[0].RenderTargetWriteMask = COLOR_WRITE_ENABLE_ALL;
+		bd.IndependentBlendEnable = false;
+		blendStates[BLENDMODE_MULTIPLY] = bd;
 
 		static wiEvent::Handle handle = wiEvent::Subscribe(SYSTEM_EVENT_RELOAD_SHADERS, [](uint64_t userdata) { LoadShaders(); });
 		LoadShaders();

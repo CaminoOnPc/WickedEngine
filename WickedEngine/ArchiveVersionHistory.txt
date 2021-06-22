@@ -1,5 +1,19 @@
 This file contains changelog of wiArchive versions
 
+70: serialized VolumetricCloudParameters
+69: serialized AABB:: layerMask and userdata parameters
+68: serialized MaterialComponent SPECULARMAP (for KHR_materials_specular)
+67: ocean water color float3 -> float4 (alpha in effect now)
+66: serialized WeatherComponent::atmosphereParameters and skyExposure
+65: serialized CameraComponent focal_length, aperture_size and aperture_shape
+64: serialized per-emitter gravity, velocity, drag and random_color
+63: serialized wiResourceManager embedded resources
+62: serialized WeatherComponent::colorGradingMapName property
+61: serialized sheen and clearcoat material properties
+60: serializer ObjectComponent::emissiveColor
+59: serialized MaterialComponent transmission parameters
+58: serialized RigidBodyPhysicsComponent capsule, sphere and box parameters
+57: serialized RigidBodyPhysicsComponent::damping_angular and SoftBodyPhysicsComponent::restitution
 56: serialized Material specularColor (specular-glossiness workflow)
 55: removed area lights
 54: MaterialComponent::subsurfaceScattering color instead of profile

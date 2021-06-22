@@ -1,13 +1,12 @@
 #pragma once
+#include "CommonInclude.h"
 
 #if __has_include("d3d11_3.h")
 #define WICKEDENGINE_BUILD_DX11
 #endif // HAS DX11
 
 #ifdef WICKEDENGINE_BUILD_DX11
-#include "CommonInclude.h"
 #include "wiGraphicsDevice.h"
-#include "wiPlatform.h"
 
 #include <d3d11_3.h>
 #include <DXGI1_3.h>
@@ -20,20 +19,20 @@ namespace wiGraphics
 
 	class GraphicsDevice_DX11 : public GraphicsDevice
 	{
-	private:
+	protected:
 		D3D_DRIVER_TYPE driverType;
 		D3D_FEATURE_LEVEL featureLevel;
+		Microsoft::WRL::ComPtr<IDXGIFactory2> DXGIFactory;
 		Microsoft::WRL::ComPtr<ID3D11Device> device;
-		Microsoft::WRL::ComPtr<IDXGISwapChain1> swapChain;
-		Microsoft::WRL::ComPtr<ID3D11RenderTargetView> renderTargetView;
-		Microsoft::WRL::ComPtr<ID3D11Texture2D> backBuffer;
 		Microsoft::WRL::ComPtr<ID3D11DeviceContext> immediateContext;
 		Microsoft::WRL::ComPtr<ID3D11DeviceContext> deviceContexts[COMMANDLIST_COUNT];
 		Microsoft::WRL::ComPtr<ID3D11CommandList> commandLists[COMMANDLIST_COUNT];
 		Microsoft::WRL::ComPtr<ID3DUserDefinedAnnotation> userDefinedAnnotations[COMMANDLIST_COUNT];
 
-		uint32_t	stencilRef[COMMANDLIST_COUNT];
-		XMFLOAT4	blendFactor[COMMANDLIST_COUNT];
+		Microsoft::WRL::ComPtr<ID3D11Query> disjointQueries[BUFFERCOUNT + 3];
+
+		uint32_t stencilRef[COMMANDLIST_COUNT];
+		XMFLOAT4 blendFactor[COMMANDLIST_COUNT];
 
 		ID3D11VertexShader* prev_vs[COMMANDLIST_COUNT] = {};
 		ID3D11PixelShader* prev_ps[COMMANDLIST_COUNT] = {};
@@ -49,12 +48,14 @@ namespace wiGraphics
 		const DepthStencilState* prev_dss[COMMANDLIST_COUNT] = {};
 		const InputLayout* prev_il[COMMANDLIST_COUNT] = {};
 		PRIMITIVETOPOLOGY prev_pt[COMMANDLIST_COUNT] = {};
+		std::vector<const SwapChain*> swapchains[COMMANDLIST_COUNT];
 
 		const PipelineState* active_pso[COMMANDLIST_COUNT] = {};
 		bool dirty_pso[COMMANDLIST_COUNT] = {};
 		void pso_validate(CommandList cmd);
 
 		const RenderPass* active_renderpass[COMMANDLIST_COUNT] = {};
+		RenderPass dummyrenderpass;
 
 		ID3D11UnorderedAccessView* raster_uavs[COMMANDLIST_COUNT][8] = {};
 		uint8_t raster_uavs_slot[COMMANDLIST_COUNT] = {};
@@ -74,43 +75,46 @@ namespace wiGraphics
 
 		std::atomic<CommandList> cmd_count{ 0 };
 
+		std::vector<StaticSampler> common_samplers;
+
 		struct EmptyResourceHandle {}; // only care about control-block
 		std::shared_ptr<EmptyResourceHandle> emptyresource;
 
 	public:
-		GraphicsDevice_DX11(wiPlatform::window_type window, bool fullscreen = false, bool debuglayer = false);
+		GraphicsDevice_DX11(bool debuglayer = false);
 
-		bool CreateBuffer(const GPUBufferDesc *pDesc, const SubresourceData* pInitialData, GPUBuffer *pBuffer) override;
-		bool CreateTexture(const TextureDesc* pDesc, const SubresourceData *pInitialData, Texture *pTexture) override;
-		bool CreateShader(SHADERSTAGE stage, const void *pShaderBytecode, size_t BytecodeLength, Shader *pShader) override;
-		bool CreateSampler(const SamplerDesc *pSamplerDesc, Sampler *pSamplerState) override;
-		bool CreateQuery(const GPUQueryDesc *pDesc, GPUQuery *pQuery) override;
-		bool CreatePipelineState(const PipelineStateDesc* pDesc, PipelineState* pso) override;
-		bool CreateRenderPass(const RenderPassDesc* pDesc, RenderPass* renderpass) override;
+		bool CreateSwapChain(const SwapChainDesc* pDesc, wiPlatform::window_type window, SwapChain* swapChain) const override;
+		bool CreateBuffer(const GPUBufferDesc *pDesc, const SubresourceData* pInitialData, GPUBuffer *pBuffer) const override;
+		bool CreateTexture(const TextureDesc* pDesc, const SubresourceData *pInitialData, Texture *pTexture) const override;
+		bool CreateShader(SHADERSTAGE stage, const void *pShaderBytecode, size_t BytecodeLength, Shader *pShader) const override;
+		bool CreateSampler(const SamplerDesc *pSamplerDesc, Sampler *pSamplerState) const override;
+		bool CreateQueryHeap(const GPUQueryHeapDesc *pDesc, GPUQueryHeap *pQueryHeap) const override;
+		bool CreatePipelineState(const PipelineStateDesc* pDesc, PipelineState* pso) const override;
+		bool CreateRenderPass(const RenderPassDesc* pDesc, RenderPass* renderpass) const override;
 
-		int CreateSubresource(Texture* texture, SUBRESOURCE_TYPE type, uint32_t firstSlice, uint32_t sliceCount, uint32_t firstMip, uint32_t mipCount) override;
-		int CreateSubresource(GPUBuffer* buffer, SUBRESOURCE_TYPE type, uint64_t offset, uint64_t size = ~0) override;
+		int CreateSubresource(Texture* texture, SUBRESOURCE_TYPE type, uint32_t firstSlice, uint32_t sliceCount, uint32_t firstMip, uint32_t mipCount) const override;
+		int CreateSubresource(GPUBuffer* buffer, SUBRESOURCE_TYPE type, uint64_t offset, uint64_t size = ~0) const override;
 
-		void Map(const GPUResource* resource, Mapping* mapping) override;
-		void Unmap(const GPUResource* resource) override;
-		bool QueryRead(const GPUQuery* query, GPUQueryResult* result) override;
+		void Map(const GPUResource* resource, Mapping* mapping) const override;
+		void Unmap(const GPUResource* resource) const override;
+		void QueryRead(const GPUQueryHeap* resource, uint32_t index, uint32_t count, uint64_t* results) const override;
+
+		void SetCommonSampler(const StaticSampler* sam) override;
 
 		void SetName(GPUResource* pResource, const char* name) override;
 
-		void PresentBegin(CommandList cmd) override;
-		void PresentEnd(CommandList cmd) override;
+		void WaitForGPU() const override;
 
-		void WaitForGPU() override;
-
-		CommandList BeginCommandList() override;
+		CommandList BeginCommandList(QUEUE_TYPE queue = QUEUE_GRAPHICS) override;
 		void SubmitCommandLists() override;
 
-		void SetResolution(int width, int height) override;
+		SHADERFORMAT GetShaderFormat() const override { return SHADERFORMAT_HLSL5; }
 
-		Texture GetBackBuffer() override;
+		Texture GetBackBuffer(const SwapChain* swapchain) const override;
 
 		///////////////Thread-sensitive////////////////////////
 
+		void RenderPassBegin(const SwapChain* swapchain, CommandList cmd) override;
 		void RenderPassBegin(const RenderPass* renderpass, CommandList cmd) override;
 		void RenderPassEnd(CommandList cmd) override;
 		void BindScissorRects(uint32_t numRects, const Rect* rects, CommandList cmd) override;
@@ -139,8 +143,8 @@ namespace wiGraphics
 		void DispatchIndirect(const GPUBuffer* args, uint32_t args_offset, CommandList cmd) override;
 		void CopyResource(const GPUResource* pDst, const GPUResource* pSrc, CommandList cmd) override;
 		void UpdateBuffer(const GPUBuffer* buffer, const void* data, CommandList cmd, int dataSize = -1) override;
-		void QueryBegin(const GPUQuery *query, CommandList cmd) override;
-		void QueryEnd(const GPUQuery *query, CommandList cmd) override;
+		void QueryBegin(const GPUQueryHeap* heap, uint32_t index, CommandList cmd) override;
+		void QueryEnd(const GPUQueryHeap* heap, uint32_t index, CommandList cmd) override;
 		void Barrier(const GPUBarrier* barriers, uint32_t numBarriers, CommandList cmd) override {}
 
 		GPUAllocation AllocateGPU(size_t dataSize, CommandList cmd) override;

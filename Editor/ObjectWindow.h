@@ -14,15 +14,25 @@ public:
 
 	wiLabel nameLabel;
 	wiCheckBox renderableCheckBox;
+	wiCheckBox shadowCheckBox;
 	wiSlider ditherSlider;
 	wiSlider cascadeMaskSlider;
+
+	wiComboBox colorComboBox;
 	wiColorPicker colorPicker;
 
 	wiLabel physicsLabel;
-	wiCheckBox rigidBodyCheckBox;
+	wiComboBox collisionShapeComboBox;
+	wiSlider XSlider;
+	wiSlider YSlider;
+	wiSlider ZSlider;
+	wiSlider massSlider;
+	wiSlider frictionSlider;
+	wiSlider restitutionSlider;
+	wiSlider lineardampingSlider;
+	wiSlider angulardampingSlider;
 	wiCheckBox disabledeactivationCheckBox;
 	wiCheckBox kinematicCheckBox;
-	wiComboBox collisionShapeComboBox;
 
 	wiSlider lightmapResolutionSlider;
 	wiComboBox lightmapSourceUVSetComboBox;

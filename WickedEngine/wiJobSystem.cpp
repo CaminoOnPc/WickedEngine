@@ -6,7 +6,7 @@
 
 #include <thread>
 #include <condition_variable>
-#include <sstream>
+#include <string>
 #include <algorithm>
 
 namespace wiJobSystem
@@ -91,23 +91,20 @@ namespace wiJobSystem
 			DWORD_PTR affinity_result = SetThreadAffinityMask(handle, affinityMask);
 			assert(affinity_result > 0);
 
-			// Increase thread priority:
-			BOOL priority_result = SetThreadPriority(handle, THREAD_PRIORITY_HIGHEST);
-			assert(priority_result != 0);
+			//// Increase thread priority:
+			//BOOL priority_result = SetThreadPriority(handle, THREAD_PRIORITY_HIGHEST);
+			//assert(priority_result != 0);
 
 			// Name the thread:
-			std::wstringstream wss;
-			wss << "wiJobSystem_" << threadID;
-			HRESULT hr = SetThreadDescription(handle, wss.str().c_str());
+			std::wstring wthreadname =  L"wiJobSystem_" + std::to_wstring(threadID);
+			HRESULT hr = SetThreadDescription(handle, wthreadname.c_str());
 			assert(SUCCEEDED(hr));
 #endif // _WIN32
 
 			worker.detach();
 		}
 
-		std::stringstream ss("");
-		ss << "wiJobSystem Initialized with [" << numCores << " cores] [" << numThreads << " threads]";
-		wiBackLog::post(ss.str().c_str());
+		wiBackLog::post(("wiJobSystem Initialized with [" + std::to_string(numCores) + " cores] [" + std::to_string(numThreads) + " threads]").c_str());
 	}
 
 	uint32_t GetThreadCount()
