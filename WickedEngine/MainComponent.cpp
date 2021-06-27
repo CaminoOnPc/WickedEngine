@@ -126,6 +126,7 @@ void MainComponent::Run()
 		if (GetActivePath() != nullptr)
 		{
 			GetActivePath()->init(canvas);
+			GetActivePath()->PreUpdate();
 		}
 
 		// Fixed time update:
@@ -187,11 +188,6 @@ void MainComponent::Run()
 void MainComponent::Update(float dt)
 {
 	auto range = wiProfiler::BeginRangeCPU("Update");
-
-	if (GetActivePath() != nullptr)
-	{
-		GetActivePath()->PreUpdate();
-	}
 
 	wiLua::SetDeltaTime(double(dt));
 	wiLua::Update();
@@ -427,7 +423,7 @@ void MainComponent::SetWindow(wiPlatform::window_type window, bool fullscreen)
 	desc.width = canvas.GetPhysicalWidth();
 	desc.height = canvas.GetPhysicalHeight();
 	desc.buffercount = 3;
-	desc.format = FORMAT_R8G8B8A8_UNORM;
+	desc.format = FORMAT_R10G10B10A2_UNORM;
 	bool success = wiRenderer::GetDevice()->CreateSwapChain(&desc, window, &swapChain);
 	assert(success);
 
